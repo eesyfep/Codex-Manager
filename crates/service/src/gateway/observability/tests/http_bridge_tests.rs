@@ -6,7 +6,7 @@ use super::{
     parse_usage_from_json, parse_usage_from_sse_frame, ChatCompletionsFromResponsesSseReader,
     GeminiSseReader, ImagesFromResponsesSseReader, ImagesResponseFormat,
     OpenAIResponsesPassthroughSseReader, PassthroughSseCollector, PassthroughSseProtocol,
-    PassthroughSseUsageReader, SseKeepAliveFrame,
+    PassthroughSseUsageReader, ResponsesFromChatCompletionsSseReader, SseKeepAliveFrame,
 };
 use crate::gateway::GeminiStreamOutputMode;
 use serde_json::json;
@@ -2068,6 +2068,118 @@ fn openai_responses_passthrough_reader_maps_bare_incomplete_to_disconnect_messag
     );
     assert_eq!(collector.upstream_error_hint, None);
     assert!(collector.saw_terminal);
+}
+
+#[test]
+fn responses_from_chat_completions_reader_emits_full_responses_lifecycle_contract() {
+    let (upstream, server) = open_streaming_mock_http_response(
+        "text/event-stream",
+        &[(
+            "data: {\"id\":\"chatcmpl_bridge_contract_1\",\"object\":\"chat.completion.chunk\",\"created\":1775900300,\"model\":\"mimo-v2.5-pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello \"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"chatcmpl_bridge_contract_1\",\"object\":\"chat.completion.chunk\",\"created\":1775900300,\"model\":\"mimo-v2.5-pro\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"bridge\"},\"finish_reason\":null}]}\n\n\
+             data: {\"id\":\"chatcmpl_bridge_contract_1\",\"object\":\"chat.completion.chunk\",\"created\":1775900300,\"model\":\"mimo-v2.5-pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10}}\n\n\
+             data: [DONE]\n\n",
+            0,
+        )],
+    );
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = ResponsesFromChatCompletionsSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        std::time::Instant::now(),
+    );
+    let mut mapped = String::new();
+    reader
+        .read_to_string(&mut mapped)
+        .expect("read responses-from-chat lifecycle stream");
+    server.join().expect("join responses-from-chat upstream");
+
+    let events = mapped
+        .split("\n\n")
+        .filter_map(|frame| frame.lines().find_map(|line| line.strip_prefix("event: ")))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events,
+        vec![
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ]
+    );
+    assert!(mapped.contains("\"id\":\"chatcmpl_bridge_contract_1\""));
+    assert!(mapped.contains("\"model\":\"mimo-v2.5-pro\""));
+    assert!(mapped.contains("\"output_text\":\"hello bridge\""));
+    assert!(mapped.contains("\"item_id\":\"msg_chatcmpl_bridge_contract_1\""));
+    assert!(mapped.contains("\"output_index\":0"));
+    assert!(mapped.contains("\"content_index\":0"));
+    assert!(mapped.contains("\"sequence_number\":0"));
+    assert!(mapped.contains("\"input_tokens\":4"));
+    assert!(mapped.contains("\"output_tokens\":6"));
+    assert!(mapped.contains("\"total_tokens\":10"));
+
+    let delta_frames = mapped
+        .split("\n\n")
+        .filter(|frame| frame.contains("event: response.output_text.delta"))
+        .map(|frame| {
+            let delta_data = frame
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .expect("delta data");
+            serde_json::from_str::<serde_json::Value>(delta_data).expect("delta json")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(delta_frames.len(), 2);
+    for delta in &delta_frames {
+        assert_eq!(delta["type"], "response.output_text.delta");
+        assert_eq!(delta["response_id"], "chatcmpl_bridge_contract_1");
+        assert_eq!(delta["item_id"], "msg_chatcmpl_bridge_contract_1");
+        assert_eq!(delta["output_index"], 0);
+        assert_eq!(delta["content_index"], 0);
+    }
+    assert_eq!(delta_frames[0]["sequence_number"], 0);
+    assert_eq!(delta_frames[0]["delta"], "hello ");
+    assert_eq!(delta_frames[1]["sequence_number"], 1);
+    assert_eq!(delta_frames[1]["delta"], "bridge");
+
+    let completed_frame = mapped
+        .split("\n\n")
+        .find(|frame| frame.contains("event: response.completed"))
+        .expect("completed frame");
+    let completed_data = completed_frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("completed data");
+    let completed: serde_json::Value =
+        serde_json::from_str(completed_data).expect("completed json");
+    assert_eq!(
+        completed["response"]["output"][0]["id"],
+        "msg_chatcmpl_bridge_contract_1"
+    );
+    assert_eq!(completed["response"]["output"][0]["status"], "completed");
+    assert_eq!(
+        completed["response"]["output"][0]["content"][0]["annotations"],
+        serde_json::json!([])
+    );
+
+    let collector = usage_collector
+        .lock()
+        .expect("lock usage collector")
+        .clone();
+    assert!(collector.saw_terminal);
+    assert_eq!(
+        collector.last_event_type.as_deref(),
+        Some("response.completed")
+    );
+    assert_eq!(collector.usage.input_tokens, Some(4));
+    assert_eq!(collector.usage.output_tokens, Some(6));
+    assert_eq!(collector.usage.total_tokens, Some(10));
 }
 
 /// 函数 `passthrough_sse_reader_captures_raw_html_error_body`
