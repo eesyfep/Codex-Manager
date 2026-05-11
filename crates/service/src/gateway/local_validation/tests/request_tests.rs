@@ -494,6 +494,36 @@ fn session_override_wins_over_api_key_model_for_aggregate_passthrough() {
     assert_eq!(reasoning_for_log.as_deref(), Some("low"));
 }
 
+#[test]
+fn aggregate_passthrough_rewrites_anthropic_alias_to_bound_source_model() {
+    let api_key = sample_api_key(
+        crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE,
+        Some(r#"["mimo-v2.5-pro","gpt-5.5"]"#),
+        None,
+        None,
+    );
+    let body =
+        br#"{"model":"anthropic-mimo-v2.5-pro","messages":[{"role":"user","content":"hi"}]}"#
+            .to_vec();
+
+    let (
+        rewritten_body,
+        model_for_log,
+        _reasoning_for_log,
+        _service_tier_for_log,
+        _effective_service_tier_for_log,
+        _has_prompt_cache_key,
+        _request_shape,
+    ) = apply_passthrough_request_overrides("/v1/messages", body, &api_key, None, None);
+    let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
+
+    assert_eq!(
+        payload.get("model").and_then(Value::as_str),
+        Some("mimo-v2.5-pro")
+    );
+    assert_eq!(model_for_log.as_deref(), Some("mimo-v2.5-pro"));
+}
+
 /// 函数 `aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_without_forcing_log_tier`
 ///
 /// 作者: gaohongshun

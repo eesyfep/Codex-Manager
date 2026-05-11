@@ -1,3 +1,4 @@
+use crate::apikey::model_binding::{forced_model_slug, request_model_alias};
 use crate::apikey_profile::{
     is_gemini_generate_content_request_path, resolve_gateway_protocol_type,
     PROTOCOL_ANTHROPIC_NATIVE, PROTOCOL_GEMINI_NATIVE, ROTATION_AGGREGATE_API,
@@ -25,15 +26,14 @@ use super::{LocalValidationError, LocalValidationResult};
 fn resolve_effective_request_overrides(
     api_key: &ApiKey,
 ) -> (Option<String>, Option<String>, Option<String>) {
-    let normalized_model = api_key
-        .model_slug
+    let bound_model = forced_model_slug(api_key.model_slug.as_deref());
+    let normalized_model = bound_model
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(super::super::resolve_builtin_forwarded_model)
         .or_else(|| {
-            api_key
-                .model_slug
+            bound_model
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -1174,6 +1174,24 @@ fn normalize_compat_service_tier_for_codex_backend(body: Vec<u8>) -> Vec<u8> {
     serde_json::to_vec(&payload).unwrap_or(body)
 }
 
+fn rewrite_request_model_alias(body: Vec<u8>, model_binding: Option<&str>) -> Vec<u8> {
+    let Ok(mut payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(obj) = payload.as_object_mut() else {
+        return body;
+    };
+    let Some(source_model) = obj
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|model| request_model_alias(Some(model), model_binding))
+    else {
+        return body;
+    };
+    obj.insert("model".to_string(), serde_json::Value::String(source_model));
+    serde_json::to_vec(&payload).unwrap_or(body)
+}
+
 fn resolve_preferred_client_prompt_cache_key(
     protocol_type: &str,
     incoming_headers: &super::super::IncomingHeaderSnapshot,
@@ -1290,10 +1308,17 @@ fn apply_passthrough_request_overrides(
             false,
         );
     let rewritten_body = super::super::normalize_official_responses_http_body(path, rewritten_body);
+    let rewritten_body = rewrite_request_model_alias(rewritten_body, api_key.model_slug.as_deref());
     let request_meta = super::super::parse_request_metadata(&rewritten_body);
     (
         rewritten_body,
-        request_meta.model.or(api_key.model_slug.clone()),
+        request_meta
+            .model
+            .and_then(|model| {
+                request_model_alias(Some(model.as_str()), api_key.model_slug.as_deref())
+                    .or(Some(model))
+            })
+            .or_else(|| forced_model_slug(api_key.model_slug.as_deref())),
         request_meta
             .reasoning_effort
             .or(api_key.reasoning_effort.clone()),
@@ -1324,6 +1349,7 @@ pub(super) fn build_local_validation_result(
     api_key: ApiKey,
 ) -> Result<LocalValidationResult, LocalValidationError> {
     // 按当前策略取消每次请求都更新 api_keys.last_used_at，减少并发写入冲突。
+    let model_binding = api_key.model_slug.clone();
     let normalized_path = super::super::normalize_models_path(request.url());
     if is_removed_openai_compat_request_path(normalized_path.as_str()) {
         return Err(LocalValidationError::new(
@@ -1373,12 +1399,13 @@ pub(super) fn build_local_validation_result(
         &incoming_headers,
         initial_request_meta.has_prompt_cache_key,
     );
+    let api_key_forced_model = forced_model_slug(api_key.model_slug.as_deref());
     ensure_codex_image_tool_model_not_used_for_text_request(
         normalized_path.as_str(),
         initial_request_meta
             .model
             .as_deref()
-            .or(api_key.model_slug.as_deref()),
+            .or(api_key_forced_model.as_deref()),
     )?;
 
     if api_key.rotation_strategy == ROTATION_AGGREGATE_API {
@@ -1458,6 +1485,7 @@ pub(super) fn build_local_validation_result(
             platform_key_hash: api_key.key_hash,
             local_conversation_id: initial_local_conversation_id,
             conversation_binding,
+            model_binding,
             model_for_log,
             reasoning_for_log,
             service_tier_for_log,
@@ -1666,11 +1694,17 @@ pub(super) fn build_local_validation_result(
     }
     body = super::super::clear_prompt_cache_key_when_native_anchor(&path, body, &incoming_headers);
     body = super::super::normalize_official_responses_http_body(&path, body);
+    body = rewrite_request_model_alias(body, api_key.model_slug.as_deref());
     super::super::validate_text_input_limit_for_path(&path, &body)
         .map_err(|err| LocalValidationError::new(400, err.message()))?;
 
     let request_meta = super::super::parse_request_metadata(&body);
-    let model_for_log = request_meta.model.or(api_key.model_slug.clone());
+    let model_for_log = request_meta
+        .model
+        .and_then(|model| {
+            request_model_alias(Some(model.as_str()), api_key.model_slug.as_deref()).or(Some(model))
+        })
+        .or_else(|| forced_model_slug(api_key.model_slug.as_deref()));
     let reasoning_for_log = request_meta
         .reasoning_effort
         .or(api_key.reasoning_effort.clone());
@@ -1713,6 +1747,7 @@ pub(super) fn build_local_validation_result(
         platform_key_hash: api_key.key_hash,
         local_conversation_id,
         conversation_binding,
+        model_binding,
         rotation_strategy: api_key.rotation_strategy,
         aggregate_api_id: api_key.aggregate_api_id,
         account_plan_filter: api_key.account_plan_filter,

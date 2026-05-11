@@ -492,8 +492,24 @@ export default function ApiKeysPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-xs font-medium text-muted-foreground">
-                        {key.model ? (
-                          key.model
+                        {key.modelSlugs.length > 0 ? (
+                          <div className="flex max-w-[260px] flex-wrap gap-1">
+                            {key.modelSlugs.slice(0, 3).map((model) => (
+                              <Badge
+                                key={model}
+                                variant="outline"
+                                className="max-w-[180px] truncate font-mono text-[10px] font-normal"
+                                title={model}
+                              >
+                                {model}
+                              </Badge>
+                            ))}
+                            {key.modelSlugs.length > 3 ? (
+                              <Badge variant="secondary" className="text-[10px] font-normal">
+                                +{key.modelSlugs.length - 3}
+                              </Badge>
+                            ) : null}
+                          </div>
                         ) : (
                           <span title="跟随请求表示使用请求体里的实际 model；请求日志展示的是最终生效模型。">
                             {t("跟随请求")}

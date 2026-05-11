@@ -1,3 +1,4 @@
+use crate::apikey::model_binding::serialize_model_bindings;
 use crate::apikey::service_tier::normalize_service_tier_owned;
 use crate::apikey_profile::{
     normalize_protocol_type, normalize_rotation_strategy, normalize_static_headers_json,
@@ -44,10 +45,7 @@ pub(crate) fn update_api_key_model(
             .update_api_key_name(key_id, normalized_name)
             .map_err(|e| e.to_string())?;
     }
-    let normalized = model_slug
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let normalized = serialize_model_bindings(model_slug.into_iter().collect());
     let normalized_reasoning = reasoning_effort
         .as_deref()
         .and_then(normalize_reasoning_effort);
@@ -71,7 +69,7 @@ pub(crate) fn update_api_key_model(
     storage
         .update_api_key_model_config(
             key_id,
-            normalized,
+            normalized.as_deref(),
             normalized_reasoning,
             normalized_service_tier.as_deref(),
         )

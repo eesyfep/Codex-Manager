@@ -1375,9 +1375,7 @@ pub(crate) fn route_aggregate_candidates_for_model(
                 .list_model_route_bindings(None)
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|b| {
-                    b.enabled && normalize_model_match_key(b.model.as_str()) != request_key
-                })
+                .filter(|b| b.enabled && normalize_model_match_key(b.model.as_str()) != request_key)
                 .map(|b| b.aggregate_api_id)
                 .filter(|id| !current_model_api_ids.contains(id.as_str()))
                 .collect()
@@ -5045,12 +5043,20 @@ mod tests {
         }
         storage
             .upsert_model_route_binding(&route_binding(
-                "mrb-a-gpt", "gpt-5.5", "agg-relay-key-a", 0, "ordered",
+                "mrb-a-gpt",
+                "gpt-5.5",
+                "agg-relay-key-a",
+                0,
+                "ordered",
             ))
             .expect("insert binding for gpt");
         storage
             .upsert_model_route_binding(&route_binding(
-                "mrb-b-glm", "glm-5.1", "agg-relay-key-b", 0, "ordered",
+                "mrb-b-glm",
+                "glm-5.1",
+                "agg-relay-key-b",
+                0,
+                "ordered",
             ))
             .expect("insert binding for glm");
 

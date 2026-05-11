@@ -287,6 +287,7 @@ pub(in super::super) fn proxy_validated_request(
         platform_key_hash,
         local_conversation_id,
         conversation_binding,
+        model_binding: _,
         model_for_log,
         reasoning_for_log,
         service_tier_for_log,

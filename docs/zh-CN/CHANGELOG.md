@@ -8,10 +8,12 @@
 ### Added
 - 新增 Codex 图片生成兼容链路：支持官方 `image_generation` tool 透传，并提供 `/v1/images/generations` 与 `/v1/images/edits` 兼容入口，默认图片工具模型为 `gpt-image-2`。
 - Codex CLI 首次接入引导新增 `auth.json` 配置步骤，明确平台 Key、`auth.json` 与 `config.toml` 的关系。
+- 平台 Key 的“绑定模型”支持多选，并会为下游 `/v1/models` 按绑定模型暴露 OpenAI / Anthropic 兼容模型列表。
 
 ### Fixed
 - 修复官方返回的 Spark 专属额度未展示的问题，附加额度会按 `additional_rate_limits[].rate_limit` 继续解析并显示。
 - 调整额度详情弹窗布局，附加额度较多时可按两列展示并滚动查看。
+- 修复 Claude / Anthropic 兼容客户端选择 `anthropic-<模型名>` 映射名后，上游请求体仍保留映射名前缀的问题。
 
 ### Changed
 - 发布版本提升到 `0.2.6`，同步更新 workspace、前端包、Tauri 桌面端与锁文件。

@@ -109,6 +109,108 @@ fn serialize_models_response_preserves_description_for_codex_clients() {
 }
 
 #[test]
+fn serialize_openai_models_response_uses_bound_model_data_shape() {
+    let items = ModelsResponse {
+        models: vec![ModelInfo {
+            slug: "mimo-v2.5-pro".to_string(),
+            display_name: "MiMo V2.5 Pro".to_string(),
+            supported_in_api: true,
+            visibility: Some("list".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let output = serialize_openai_models_response(&items);
+    let value: Value = serde_json::from_str(&output).expect("valid json");
+    assert_eq!(value.get("object").and_then(Value::as_str), Some("list"));
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .expect("data array");
+    assert_eq!(data.len(), 1);
+    assert_eq!(
+        data[0].get("id").and_then(Value::as_str),
+        Some("mimo-v2.5-pro")
+    );
+    assert_eq!(
+        data[0].get("display_name").and_then(Value::as_str),
+        Some("MiMo V2.5 Pro")
+    );
+}
+
+#[test]
+fn serialize_anthropic_models_response_prefixes_non_claude_ids() {
+    let items = ModelsResponse {
+        models: vec![
+            ModelInfo {
+                slug: "mimo-v2.5-pro".to_string(),
+                display_name: "MiMo V2.5 Pro".to_string(),
+                supported_in_api: true,
+                visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "claude-sonnet-4-6".to_string(),
+                display_name: "Claude Sonnet 4.6".to_string(),
+                supported_in_api: true,
+                visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let output = serialize_anthropic_models_response(&items);
+    let value: Value = serde_json::from_str(&output).expect("valid json");
+    let data = value
+        .get("data")
+        .and_then(Value::as_array)
+        .expect("data array");
+    assert_eq!(data.len(), 2);
+    assert_eq!(
+        data[0].get("id").and_then(Value::as_str),
+        Some("anthropic-mimo-v2.5-pro")
+    );
+    assert_eq!(
+        data[1].get("id").and_then(Value::as_str),
+        Some("claude-sonnet-4-6")
+    );
+    assert_eq!(value.get("has_more").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        value.get("first_id").and_then(Value::as_str),
+        Some("anthropic-mimo-v2.5-pro")
+    );
+}
+
+#[test]
+fn filter_models_for_platform_key_keeps_only_bound_models() {
+    let items = ModelsResponse {
+        models: vec![
+            ModelInfo {
+                slug: "gpt-5.5".to_string(),
+                display_name: "GPT 5.5".to_string(),
+                supported_in_api: true,
+                visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "mimo-v2.5-pro".to_string(),
+                display_name: "MiMo V2.5 Pro".to_string(),
+                supported_in_api: true,
+                visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let filtered = filter_models_for_platform_key(&items, Some(r#"["mimo-v2.5-pro"]"#));
+    assert_eq!(filtered.models.len(), 1);
+    assert_eq!(filtered.models[0].slug, "mimo-v2.5-pro");
+}
+
+#[test]
 fn serialize_models_response_filters_hidden_and_non_api_models() {
     let items = ModelsResponse {
         models: vec![

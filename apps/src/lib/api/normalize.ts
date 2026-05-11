@@ -674,12 +674,16 @@ export function normalizeApiKey(item: unknown): ApiKey | null {
   const source = asObject(item);
   const id = asString(source.id);
   if (!id) return null;
+  const rawModel = source.modelSlug ?? source.model_slug;
+  const modelSlugs = normalizeModelBindingSlugs(rawModel);
+  const modelSlug = modelSlugs[0] || asString(rawModel);
 
   return {
     id,
     name: asString(source.name) || "未命名",
-    model: asString(source.modelSlug ?? source.model_slug),
-    modelSlug: asString(source.modelSlug ?? source.model_slug),
+    model: modelSlug,
+    modelSlug,
+    modelSlugs,
     reasoningEffort: asString(source.reasoningEffort ?? source.reasoning_effort),
     serviceTier: asString(source.serviceTier ?? source.service_tier),
     rotationStrategy: asString(source.rotationStrategy ?? source.rotation_strategy) || "account_rotation",
@@ -1833,4 +1837,31 @@ export function normalizeStartupSnapshot(payload: unknown): StartupSnapshot {
       source.dashboardDailyTokenUsage
     ),
   };
+}
+
+function normalizeModelBindingSlugs(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return dedupeModelSlugs(value.map((item) => asString(item)));
+  }
+  const raw = asString(value).trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return dedupeModelSlugs(parsed.map((item) => asString(item)));
+    }
+  } catch {
+    // Keep legacy single-value model bindings compatible.
+  }
+  return dedupeModelSlugs(raw.split(","));
+}
+
+function dedupeModelSlugs(values: string[]): string[] {
+  const result: string[] = [];
+  values.forEach((value) => {
+    const next = String(value || "").trim();
+    if (!next || next === "auto" || result.includes(next)) return;
+    result.push(next);
+  });
+  return result;
 }

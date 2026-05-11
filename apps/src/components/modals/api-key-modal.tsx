@@ -20,10 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  SearchableModelPicker,
-  type SearchableModelOption,
-} from "@/components/searchable-model-picker";
+import { type SearchableModelOption } from "@/components/searchable-model-picker";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -32,7 +29,7 @@ import { copyTextToClipboard } from "@/lib/utils/clipboard";
 import { findBestMatchingModel } from "@/lib/api/model-catalog";
 import { toast } from "sonner";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
-import { Key, Clipboard, ShieldCheck } from "lucide-react";
+import { Check, Key, Clipboard, ShieldCheck, Search, X } from "lucide-react";
 import { ApiKey, ManagedModelInfo, ModelInfo } from "@/types";
 
 const PROTOCOL_LABELS: Record<string, string> = {
@@ -102,7 +99,8 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
   const { canAccessManagementRpc } = useRuntimeCapabilities();
   const [name, setName] = useState("");
   const [protocolType, setProtocolType] = useState("openai_compat");
-  const [modelSlug, setModelSlug] = useState("");
+  const [modelSlugs, setModelSlugs] = useState<string[]>([]);
+  const [modelSearch, setModelSearch] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
   const [serviceTier, setServiceTier] = useState("");
   const [rotationStrategy, setRotationStrategy] = useState("account_rotation");
@@ -151,8 +149,8 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
   });
 
   const selectedModelInfo = useMemo(
-    () => findBestMatchingModel(models?.models || [], modelSlug),
-    [modelSlug, models?.models],
+    () => findBestMatchingModel(models?.models || [], modelSlugs[0] || ""),
+    [modelSlugs, models?.models],
   );
 
   const mergedModels = useMemo(() => {
@@ -168,7 +166,7 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
 
   const visibleModels = useMemo(() => {
     const catalog = mergedModels;
-    const selectedSlug = String(modelSlug || "").trim();
+    const selectedSlug = String(modelSlugs[0] || "").trim();
     const baseModels = catalog.filter((model) => {
       if (model.supportedInApi) {
         return true;
@@ -186,16 +184,10 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
       ];
     }
     return baseModels;
-  }, [mergedModels, modelSlug, selectedModelInfo]);
+  }, [mergedModels, modelSlugs, selectedModelInfo]);
 
   const modelOptions = useMemo<SearchableModelOption[]>(() => {
-    const options: SearchableModelOption[] = [
-      {
-        value: "auto",
-        label: t("跟随请求"),
-        keywords: ["auto", "follow request"],
-      },
-    ];
+    const options: SearchableModelOption[] = [];
     visibleModels.forEach((model) => {
       options.push({
         value: model.slug,
@@ -204,7 +196,18 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
       });
     });
     return options;
-  }, [t, visibleModels]);
+  }, [visibleModels]);
+
+  const filteredModelOptions = useMemo(() => {
+    const keyword = modelSearch.trim().toLowerCase();
+    if (!keyword) return modelOptions;
+    return modelOptions.filter((option) =>
+      [option.value, option.label, ...(option.keywords || [])]
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword),
+    );
+  }, [modelOptions, modelSearch]);
 
   useEffect(() => {
     if (!open) return;
@@ -212,7 +215,8 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
     if (!apiKey) {
       setName("");
       setProtocolType("openai_compat");
-      setModelSlug("");
+      setModelSlugs([]);
+      setModelSearch("");
       setReasoningEffort("");
       setServiceTier("");
       setRotationStrategy("account_rotation");
@@ -224,7 +228,8 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
 
     setName(apiKey.name || "");
     setProtocolType("openai_compat");
-    setModelSlug(apiKey.modelSlug || "");
+    setModelSlugs(apiKey.modelSlugs || (apiKey.modelSlug ? [apiKey.modelSlug] : []));
+    setModelSearch("");
     setReasoningEffort(apiKey.reasoningEffort || "");
     setServiceTier(normalizeEditableServiceTier(apiKey.serviceTier));
     setRotationStrategy(apiKey.rotationStrategy || "account_rotation");
@@ -259,7 +264,8 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
     try {
       const params = {
         name: name || null,
-        modelSlug: !modelSlug || modelSlug === "auto" ? null : modelSlug,
+        modelSlug: modelSlugs[0] || null,
+        modelSlugs,
         reasoningEffort:
           !reasoningEffort || reasoningEffort === "auto"
             ? null
@@ -320,6 +326,25 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
     } catch (error: unknown) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
+  };
+
+  const toggleModelSlug = (value: string) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return;
+    setModelSlugs((current) =>
+      current.includes(normalized)
+        ? current.filter((item) => item !== normalized)
+        : [...current, normalized],
+    );
+  };
+
+  const addCustomModelSlug = () => {
+    const normalized = modelSearch.trim();
+    if (!normalized) return;
+    setModelSlugs((current) =>
+      current.includes(normalized) ? current : [...current, normalized],
+    );
+    setModelSearch("");
   };
 
   return (
@@ -451,21 +476,107 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
               </p>
             </div>
             <div className="grid gap-2 content-start">
-              <Label>{t("绑定模型 (可选)")}</Label>
-              <SearchableModelPicker
-                value={modelSlug || "auto"}
-                onValueChange={(val) => setModelSlug(val === "auto" ? "" : val)}
-                options={modelOptions}
-                placeholder={t("跟随请求")}
-                searchPlaceholder={t("搜索模型 slug 或显示名称")}
-                emptyLabel={t("没有匹配的模型")}
-                disabled={!isServiceReady}
-                allowCustomValue
-                customValuePrefix={t("使用输入值")}
-                triggerClassName="h-9"
-              />
+              <div className="flex items-center justify-between gap-2">
+                <Label>{t("绑定模型 (可选)")}</Label>
+                {modelSlugs.length > 0 ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    disabled={!isServiceReady}
+                    onClick={() => setModelSlugs([])}
+                  >
+                    {t("清空")}
+                  </Button>
+                ) : null}
+              </div>
+              <div className="rounded-lg border border-input bg-background/45 p-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={modelSearch}
+                    onChange={(event) => setModelSearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addCustomModelSlug();
+                      }
+                    }}
+                    placeholder={t("搜索或输入模型 slug")}
+                    className="h-8 pl-8"
+                    disabled={!isServiceReady}
+                  />
+                </div>
+                {modelSlugs.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {modelSlugs.map((model) => (
+                      <span
+                        key={model}
+                        className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary/10 px-2 py-1 font-mono text-[11px] text-primary"
+                      >
+                        <span className="truncate">{model}</span>
+                        <button
+                          type="button"
+                          className="rounded-sm hover:bg-primary/15"
+                          disabled={!isServiceReady}
+                          onClick={() => toggleModelSlug(model)}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="mt-2 max-h-44 overflow-y-auto">
+                  {filteredModelOptions.length > 0 ? (
+                    filteredModelOptions.map((option) => {
+                      const checked = modelSlugs.includes(option.value);
+                      return (
+                        <button
+                          type="button"
+                          key={option.value}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                          disabled={!isServiceReady}
+                          onClick={() => toggleModelSlug(option.value)}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`flex size-4 shrink-0 items-center justify-center rounded-[4px] border ${
+                              checked
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "border-input bg-background/50"
+                            }`}
+                          >
+                            {checked ? <Check className="h-3.5 w-3.5" /> : null}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate">{option.label}</span>
+                            {option.label !== option.value ? (
+                              <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                                {option.value}
+                              </span>
+                            ) : null}
+                          </span>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <button
+                      type="button"
+                      className="w-full rounded-md px-2 py-2 text-left text-sm text-muted-foreground hover:bg-accent"
+                      disabled={!isServiceReady || !modelSearch.trim()}
+                      onClick={addCustomModelSlug}
+                    >
+                      {modelSearch.trim()
+                        ? `${t("使用输入值")} ${modelSearch.trim()}`
+                        : t("没有匹配的模型")}
+                    </button>
+                  )}
+                </div>
+              </div>
               <p className="text-[11px] text-muted-foreground">
-                {t("选择“跟随请求”时，会使用请求体里的实际模型；请求日志展示的是最终生效模型。")}
+                {t("未勾选时跟随请求；勾选多个时 /v1/models 只暴露这些模型，请求默认覆盖使用第一个。")}
               </p>
             </div>
           </div>

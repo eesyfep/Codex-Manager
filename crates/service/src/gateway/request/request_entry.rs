@@ -110,6 +110,7 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
         validated.model_for_log.as_deref(),
         validated.reasoning_for_log.as_deref(),
         &validated.storage,
+        validated.model_binding.as_deref(),
     )? {
         Some(request) => request,
         None => return Ok(()),

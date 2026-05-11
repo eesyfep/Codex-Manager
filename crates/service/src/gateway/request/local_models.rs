@@ -1,4 +1,5 @@
 use codexmanager_core::rpc::types::{ModelInfo, ModelsResponse};
+use std::collections::HashSet;
 
 const MODEL_CACHE_SCOPE_DEFAULT: &str = "default";
 const DEFAULT_CODEX_COMPAT_INSTRUCTIONS: &str =
@@ -19,6 +20,22 @@ fn default_codex_model_messages() -> serde_json::Value {
 #[derive(serde::Serialize)]
 struct OfficialModelsResponse {
     models: Vec<serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct OpenAiModelsResponse {
+    object: &'static str,
+    data: Vec<serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct AnthropicModelsResponse {
+    data: Vec<serde_json::Value>,
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_id: Option<String>,
 }
 
 fn normalize_visibility(value: Option<&str>) -> Option<&str> {
@@ -182,6 +199,116 @@ fn serialize_models_response(models: &ModelsResponse) -> String {
     .unwrap_or_else(|_| "{\"models\":[]}".to_string())
 }
 
+fn filter_models_for_platform_key(
+    models: &ModelsResponse,
+    model_binding: Option<&str>,
+) -> ModelsResponse {
+    let bound = crate::apikey::model_binding::model_binding_slugs(model_binding);
+    if bound.is_empty() {
+        return models.clone();
+    }
+    let allowed = bound.into_iter().collect::<HashSet<_>>();
+    let filtered = models
+        .models
+        .iter()
+        .filter(|model| allowed.contains(model.slug.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    ModelsResponse {
+        models: filtered,
+        extra: models.extra.clone(),
+    }
+}
+
+fn openai_model_item(model: &ModelInfo) -> serde_json::Value {
+    serde_json::json!({
+        "id": model.slug,
+        "object": "model",
+        "created": 0,
+        "owned_by": "codexmanager",
+        "display_name": if model.display_name.trim().is_empty() {
+            model.slug.as_str()
+        } else {
+            model.display_name.as_str()
+        },
+    })
+}
+
+fn anthropic_model_id(model: &ModelInfo) -> String {
+    let slug = model.slug.trim();
+    if slug.starts_with("claude") || slug.starts_with("anthropic") {
+        slug.to_string()
+    } else {
+        format!("anthropic-{slug}")
+    }
+}
+
+fn anthropic_model_item(model: &ModelInfo) -> serde_json::Value {
+    let id = anthropic_model_id(model);
+    serde_json::json!({
+        "id": id,
+        "type": "model",
+        "display_name": if model.display_name.trim().is_empty() {
+            model.slug.as_str()
+        } else {
+            model.display_name.as_str()
+        },
+        "created_at": "2026-05-12T00:00:00Z",
+        "source_model": model.slug,
+    })
+}
+
+fn prefers_anthropic_models_response(protocol_type: &str, request: &tiny_http::Request) -> bool {
+    if protocol_type == crate::apikey_profile::PROTOCOL_ANTHROPIC_NATIVE {
+        return true;
+    }
+    request
+        .headers()
+        .iter()
+        .filter(|header| header.field.equiv("accept"))
+        .any(|header| header.value.as_str().contains("anthropic"))
+}
+
+fn serialize_openai_models_response(models: &ModelsResponse) -> String {
+    let data = models
+        .models
+        .iter()
+        .filter(|model| is_visible_for_codex_app(model))
+        .map(openai_model_item)
+        .collect::<Vec<_>>();
+    serde_json::to_string(&OpenAiModelsResponse {
+        object: "list",
+        data,
+    })
+    .unwrap_or_else(|_| "{\"object\":\"list\",\"data\":[]}".to_string())
+}
+
+fn serialize_anthropic_models_response(models: &ModelsResponse) -> String {
+    let data = models
+        .models
+        .iter()
+        .filter(|model| is_visible_for_codex_app(model))
+        .map(anthropic_model_item)
+        .collect::<Vec<_>>();
+    let first_id = data
+        .first()
+        .and_then(|item| item.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let last_id = data
+        .last()
+        .and_then(|item| item.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    serde_json::to_string(&AnthropicModelsResponse {
+        data,
+        has_more: false,
+        first_id,
+        last_id,
+    })
+    .unwrap_or_else(|_| "{\"data\":[],\"has_more\":false}".to_string())
+}
+
 fn models_etag_header(models: &ModelsResponse) -> Result<Option<tiny_http::Header>, String> {
     let Some(etag) = models.extra.get("etag").and_then(serde_json::Value::as_str) else {
         return Ok(None);
@@ -231,6 +358,7 @@ pub(super) fn maybe_respond_local_models(
     model_for_log: Option<&str>,
     reasoning_for_log: Option<&str>,
     storage: &codexmanager_core::storage::Storage,
+    model_binding: Option<&str>,
 ) -> Result<Option<tiny_http::Request>, String> {
     let is_models_list = request_method.eq_ignore_ascii_case("GET")
         && (path == "/v1/models" || path.starts_with("/v1/models?"));
@@ -300,8 +428,14 @@ pub(super) fn maybe_respond_local_models(
         }
     };
 
-    let output_models = crate::apikey_models::ensure_codex_image_tool_model_listed(&models);
-    let output = serialize_models_response(&output_models);
+    let output_models = filter_models_for_platform_key(&models, model_binding);
+    let output = if prefers_anthropic_models_response(protocol_type, &request) {
+        serialize_anthropic_models_response(&output_models)
+    } else if !crate::apikey::model_binding::model_binding_slugs(model_binding).is_empty() {
+        serialize_openai_models_response(&output_models)
+    } else {
+        serialize_models_response(&output_models)
+    };
     let extra_headers = models_etag_header(&output_models)?.into_iter().collect();
     super::local_response::respond_local_json_with_headers(
         request,

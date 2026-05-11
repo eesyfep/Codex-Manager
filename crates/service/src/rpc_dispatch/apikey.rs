@@ -26,7 +26,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
         ),
         "apikey/create" => {
             let name = super::string_param(req, "name");
-            let model_slug = super::string_param(req, "modelSlug");
+            let model_slug = super::string_array_param(req, "modelSlugs")
+                .and_then(crate::apikey::model_binding::serialize_model_bindings)
+                .or_else(|| super::string_param(req, "modelSlug"));
             let reasoning_effort = super::string_param(req, "reasoningEffort");
             let service_tier = super::string_param(req, "serviceTier");
             let protocol_type = super::string_param(req, "protocolType");
@@ -88,7 +90,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 .map(|params| params.contains_key("name"))
                 .unwrap_or(false);
             let name = super::string_param(req, "name");
-            let model_slug = super::string_param(req, "modelSlug");
+            let model_slug = super::string_array_param(req, "modelSlugs")
+                .and_then(crate::apikey::model_binding::serialize_model_bindings)
+                .or_else(|| super::string_param(req, "modelSlug"));
             let reasoning_effort = super::string_param(req, "reasoningEffort");
             let service_tier = super::string_param(req, "serviceTier");
             let protocol_type = super::string_param(req, "protocolType");

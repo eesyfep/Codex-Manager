@@ -85,6 +85,20 @@ pub(super) fn string_param(req: &JsonRpcRequest, key: &str) -> Option<String> {
     str_param(req, key).map(|v| v.to_string())
 }
 
+pub(super) fn string_array_param(req: &JsonRpcRequest, key: &str) -> Option<Vec<String>> {
+    req.params
+        .as_ref()
+        .and_then(|v| v.get(key))
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::to_string)
+                .collect()
+        })
+}
+
 /// 函数 `i64_param`
 ///
 /// 作者: gaohongshun

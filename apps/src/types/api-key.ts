@@ -3,6 +3,7 @@ export interface ApiKey {
   name: string;
   model: string;
   modelSlug: string;
+  modelSlugs: string[];
   reasoningEffort: string;
   serviceTier: string;
   rotationStrategy: string;

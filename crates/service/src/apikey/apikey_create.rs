@@ -1,6 +1,7 @@
 use codexmanager_core::rpc::types::ApiKeyCreateResult;
 use codexmanager_core::storage::{now_ts, ApiKey};
 
+use crate::apikey::model_binding::serialize_model_bindings;
 use crate::apikey::service_tier::normalize_service_tier_owned;
 use crate::apikey_profile::{
     normalize_protocol_type, normalize_rotation_strategy, normalize_static_headers_json,
@@ -58,6 +59,7 @@ pub(crate) fn create_api_key(
     } else {
         None
     };
+    let model_slug = serialize_model_bindings(model_slug.into_iter().collect());
     let record = ApiKey {
         id: key_id.clone(),
         name,
