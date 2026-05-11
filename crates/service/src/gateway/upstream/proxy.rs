@@ -288,6 +288,7 @@ pub(in super::super) fn proxy_validated_request(
         local_conversation_id,
         conversation_binding,
         model_binding: _,
+        native_codex_client: _,
         model_for_log,
         reasoning_for_log,
         service_tier_for_log,

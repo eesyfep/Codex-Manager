@@ -211,6 +211,33 @@ fn filter_models_for_platform_key_keeps_only_bound_models() {
 }
 
 #[test]
+fn openai_compat_non_codex_clients_use_openai_models_shape_without_binding() {
+    assert!(should_serve_openai_models_response(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        false,
+        None
+    ));
+}
+
+#[test]
+fn native_codex_clients_keep_codex_models_shape_without_binding() {
+    assert!(!should_serve_openai_models_response(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        true,
+        None
+    ));
+}
+
+#[test]
+fn native_codex_clients_with_binding_use_openai_shape_for_filtered_catalog() {
+    assert!(should_serve_openai_models_response(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        true,
+        Some(r#"["gpt-5.5"]"#)
+    ));
+}
+
+#[test]
 fn serialize_models_response_filters_hidden_and_non_api_models() {
     let items = ModelsResponse {
         models: vec![

@@ -14,6 +14,7 @@
 - 修复官方返回的 Spark 专属额度未展示的问题，附加额度会按 `additional_rate_limits[].rate_limit` 继续解析并显示。
 - 调整额度详情弹窗布局，附加额度较多时可按两列展示并滚动查看。
 - 修复 Claude / Anthropic 兼容客户端选择 `anthropic-<模型名>` 映射名后，上游请求体仍保留映射名前缀的问题。
+- 修复 OpenAI 兼容客户端使用未绑定模型的平台 Key 获取 `/v1/models` 时仍收到 Codex 私有 `models` 结构的问题，CC Desktop Switch 等客户端现在可解析标准 `data` 模型列表。
 
 ### Changed
 - 发布版本提升到 `0.2.6`，同步更新 workspace、前端包、Tauri 桌面端与锁文件。

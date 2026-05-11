@@ -269,6 +269,16 @@ fn prefers_anthropic_models_response(protocol_type: &str, request: &tiny_http::R
         .any(|header| header.value.as_str().contains("anthropic"))
 }
 
+fn should_serve_openai_models_response(
+    protocol_type: &str,
+    native_codex_client: bool,
+    model_binding: Option<&str>,
+) -> bool {
+    protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
+        && (!native_codex_client
+            || !crate::apikey::model_binding::model_binding_slugs(model_binding).is_empty())
+}
+
 fn serialize_openai_models_response(models: &ModelsResponse) -> String {
     let data = models
         .models
@@ -359,6 +369,7 @@ pub(super) fn maybe_respond_local_models(
     reasoning_for_log: Option<&str>,
     storage: &codexmanager_core::storage::Storage,
     model_binding: Option<&str>,
+    native_codex_client: bool,
 ) -> Result<Option<tiny_http::Request>, String> {
     let is_models_list = request_method.eq_ignore_ascii_case("GET")
         && (path == "/v1/models" || path.starts_with("/v1/models?"));
@@ -431,7 +442,8 @@ pub(super) fn maybe_respond_local_models(
     let output_models = filter_models_for_platform_key(&models, model_binding);
     let output = if prefers_anthropic_models_response(protocol_type, &request) {
         serialize_anthropic_models_response(&output_models)
-    } else if !crate::apikey::model_binding::model_binding_slugs(model_binding).is_empty() {
+    } else if should_serve_openai_models_response(protocol_type, native_codex_client, model_binding)
+    {
         serialize_openai_models_response(&output_models)
     } else {
         serialize_models_response(&output_models)
