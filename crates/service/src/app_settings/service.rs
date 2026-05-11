@@ -3,9 +3,9 @@ use super::{
     APP_SETTING_SERVICE_ADDR_KEY,
 };
 
-pub const DEFAULT_ADDR: &str = "localhost:48760";
+pub const DEFAULT_ADDR: &str = "127.0.0.1:48760";
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:48760";
-pub const DEFAULT_WEB_ADDR: &str = "localhost:48761";
+pub const DEFAULT_WEB_ADDR: &str = "127.0.0.1:48761";
 pub const DEFAULT_WEB_BIND_ADDR: &str = "0.0.0.0:48761";
 pub const SERVICE_BIND_MODE_SETTING_KEY: &str = "service.bind_mode";
 pub const SERVICE_BIND_MODE_LOOPBACK: &str = "loopback";
@@ -59,7 +59,7 @@ fn normalize_saved_service_addr(raw: Option<&str>) -> Result<String, String> {
     if value.contains(':') {
         return Ok(value.to_string());
     }
-    Ok(format!("localhost:{value}"))
+    Ok(format!("127.0.0.1:{value}"))
 }
 
 /// 函数 `current_env_service_addr`
@@ -80,7 +80,7 @@ fn current_env_service_addr() -> Option<String> {
         return Some(normalized);
     };
     match host {
-        "0.0.0.0" | "::" | "[::]" => Some(format!("localhost:{port}")),
+        "0.0.0.0" | "::" | "[::]" => Some(format!("127.0.0.1:{port}")),
         _ => Some(normalized),
     }
 }
@@ -269,7 +269,7 @@ pub fn default_web_listener_addr() -> String {
             if bind_all_interfaces_enabled() {
                 format!("0.0.0.0:{web_port}")
             } else {
-                format!("localhost:{web_port}")
+                format!("127.0.0.1:{web_port}")
             }
         }
         _ => format!("{host}:{web_port}"),
@@ -322,7 +322,7 @@ pub fn listener_bind_addr_for_mode(addr: &str, bind_mode: &str) -> String {
         return if bind_all {
             format!("0.0.0.0:{addr}")
         } else {
-            format!("localhost:{addr}")
+            format!("127.0.0.1:{addr}")
         };
     }
 
@@ -340,7 +340,7 @@ pub fn listener_bind_addr_for_mode(addr: &str, bind_mode: &str) -> String {
         return if bind_all {
             format!("0.0.0.0:{port}")
         } else {
-            format!("localhost:{port}")
+            format!("127.0.0.1:{port}")
         };
     }
 

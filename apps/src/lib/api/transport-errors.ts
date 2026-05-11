@@ -37,6 +37,19 @@ function normalizeKnownAppErrorMessage(message: string): string {
   }
 
   const normalized = trimmed.toLowerCase();
+
+  // Parse structured cause from bracket metadata (e.g. "[cause=upstream_stream_failed ...]")
+  const causeMatch = normalized.match(/\[cause=(\w+)/);
+  if (causeMatch) {
+    const cause = causeMatch[1];
+    if (cause === "upstream_stream_failed") {
+      return "上游中转站流式传输中断（响应已开始，建议重试或更换中转站）";
+    }
+    if (cause === "response_incomplete") {
+      return "上游响应不完整（提前终止）";
+    }
+  }
+
   if (
     normalized === "request or response body error" ||
     normalized === "stream read failed" ||

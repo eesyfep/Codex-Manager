@@ -3,6 +3,48 @@ use rusqlite::params;
 use super::{ConversationBinding, Storage};
 
 impl Storage {
+    pub fn list_recent_conversation_bindings(
+        &self,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<ConversationBinding>> {
+        let normalized_limit = if limit <= 0 { 20 } else { limit.min(200) };
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                platform_key_hash,
+                conversation_id,
+                account_id,
+                thread_epoch,
+                thread_anchor,
+                status,
+                last_model,
+                last_switch_reason,
+                created_at,
+                updated_at,
+                last_used_at
+             FROM conversation_bindings
+             ORDER BY last_used_at DESC, updated_at DESC
+             LIMIT ?1",
+        )?;
+        let mut rows = stmt.query([normalized_limit])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            out.push(ConversationBinding {
+                platform_key_hash: row.get(0)?,
+                conversation_id: row.get(1)?,
+                account_id: row.get(2)?,
+                thread_epoch: row.get(3)?,
+                thread_anchor: row.get(4)?,
+                status: row.get(5)?,
+                last_model: row.get(6)?,
+                last_switch_reason: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                last_used_at: row.get(10)?,
+            });
+        }
+        Ok(out)
+    }
+
     /// 函数 `get_conversation_binding`
     ///
     /// 作者: gaohongshun

@@ -30,7 +30,7 @@ pub(crate) fn normalize_addr(raw: &str) -> Result<String, String> {
     if value.contains(':') {
         Ok(normalize_host(value))
     } else if value.parse::<u16>().is_ok() {
-        Ok(format!("localhost:{value}"))
+        Ok(format!("127.0.0.1:{value}"))
     } else {
         Ok(normalize_host(value))
     }
@@ -102,7 +102,7 @@ pub(crate) fn resolve_socket_addrs(addr: &str) -> Result<Vec<SocketAddr>, String
 fn normalize_host(value: &str) -> String {
     if let Some((host, port)) = value.rsplit_once(':') {
         let mapped = match host {
-            "127.0.0.1" | "0.0.0.0" | "::1" | "[::1]" => "localhost",
+            "0.0.0.0" | "::1" | "[::1]" => "127.0.0.1",
             _ => host,
         };
         format!("{mapped}:{port}")

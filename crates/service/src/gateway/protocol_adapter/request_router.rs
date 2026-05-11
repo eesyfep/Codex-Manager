@@ -1321,6 +1321,17 @@ mod tests {
     }
 
     #[test]
+    fn openai_passthrough_uses_native_responses_contract() {
+        let body = br#"{"model":"gpt-5.5","input":"hi"}"#.to_vec();
+
+        let adapted =
+            adapt_request_for_protocol("openai_compat", "/v1/responses", body).expect("adapt");
+
+        assert_eq!(adapted.path, "/v1/responses");
+        assert_eq!(adapted.response_adapter, ResponseAdapter::Passthrough);
+    }
+
+    #[test]
     fn gemini_generate_content_is_rewritten_to_responses() {
         let body = br#"{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}"#.to_vec();
 

@@ -75,6 +75,25 @@ fn value_to_string(value: &Value) -> Option<String> {
     }
 }
 
+fn reasoning_text_from_item(item_obj: &serde_json::Map<String, Value>) -> Option<String> {
+    item_obj
+        .get("summary")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| {
+            item_obj
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+}
+
 /// 函数 `flatten_responses_message_content`
 ///
 /// 作者: gaohongshun
@@ -104,6 +123,14 @@ fn flatten_responses_message_content(content: &Value) -> Option<Value> {
                     "input_text" | "output_text" | "text" => {
                         if let Some(text) = item_obj.get("text").and_then(Value::as_str) {
                             text_parts.push(text.to_string());
+                        }
+                    }
+                    "reasoning" => {
+                        if let Some(text) = reasoning_text_from_item(item_obj)
+                            .map(|text| text.trim().to_string())
+                            .filter(|text| !text.is_empty())
+                        {
+                            text_parts.push(format!("<think>{text}</think>"));
                         }
                     }
                     "input_image" => {
@@ -162,6 +189,35 @@ fn convert_responses_input_item_to_chat_messages(item: &Value, out: &mut Vec<Val
         .and_then(Value::as_str)
         .unwrap_or_default();
     match item_type {
+        "function_call" => {
+            let call_id = item_obj
+                .get("call_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let name = item_obj
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let arguments = item_obj
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            if call_id.is_empty() && name.is_empty() {
+                return;
+            }
+            out.push(json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments
+                    }
+                }]
+            }));
+        }
         "function_call_output" => {
             let call_id = item_obj
                 .get("call_id")
@@ -243,28 +299,60 @@ fn normalize_responses_tools_to_chat(obj: &mut serde_json::Map<String, Value>) -
             .and_then(Value::as_str)
             .map(|kind| kind == "function")
             .unwrap_or(false);
-        if !is_function || tool_obj.contains_key("function") {
+        if !is_function {
+            tool_obj.clear();
+            changed = true;
             continue;
         }
-        let mut fn_obj = serde_json::Map::new();
-        if let Some(name) = tool_obj.remove("name") {
-            fn_obj.insert("name".to_string(), name);
+
+        let top_level_name = tool_obj.remove("name");
+        let top_level_description = tool_obj.remove("description");
+        let top_level_parameters = tool_obj.remove("parameters");
+        let top_level_strict = tool_obj.remove("strict");
+        let nested_function = tool_obj.remove("function");
+
+        let mut function_obj = match nested_function {
+            Some(Value::Object(map)) => map,
+            _ => serde_json::Map::new(),
+        };
+
+        if function_obj
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            if let Some(name) = top_level_name {
+                function_obj.insert("name".to_string(), name);
+            }
         }
-        if let Some(description) = tool_obj.remove("description") {
-            fn_obj.insert("description".to_string(), description);
+        if let Some(description) = top_level_description {
+            function_obj.insert("description".to_string(), description);
         }
-        if let Some(parameters) = tool_obj.remove("parameters") {
-            fn_obj.insert("parameters".to_string(), parameters);
+        if let Some(parameters) = top_level_parameters {
+            function_obj.insert("parameters".to_string(), parameters);
         }
-        if let Some(strict) = tool_obj.remove("strict") {
-            fn_obj.insert("strict".to_string(), strict);
+        if let Some(strict) = top_level_strict {
+            function_obj.insert("strict".to_string(), strict);
         }
-        if fn_obj.is_empty() {
+
+        if function_obj
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            tool_obj.clear();
+            changed = true;
             continue;
         }
-        tool_obj.insert("function".to_string(), Value::Object(fn_obj));
+
+        tool_obj.insert("function".to_string(), Value::Object(function_obj));
         changed = true;
     }
+    tools.retain(|tool| !tool.as_object().is_some_and(|tool_obj| tool_obj.is_empty()));
     changed
 }
 
@@ -288,13 +376,36 @@ fn normalize_responses_tool_choice_to_chat(obj: &mut serde_json::Map<String, Val
         .and_then(Value::as_str)
         .map(|kind| kind == "function")
         .unwrap_or(false);
-    if !is_function || tool_choice_obj.contains_key("function") {
+    if !is_function {
         return false;
     }
-    let Some(name) = tool_choice_obj.remove("name") else {
-        return false;
+    let top_level_name = tool_choice_obj.remove("name");
+    let nested_function = tool_choice_obj.remove("function");
+    let mut function_obj = match nested_function {
+        Some(Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
     };
-    tool_choice_obj.insert("function".to_string(), json!({ "name": name }));
+    if function_obj
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        if let Some(name) = top_level_name {
+            function_obj.insert("name".to_string(), name);
+        }
+    }
+    if function_obj
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        return false;
+    }
+    tool_choice_obj.insert("function".to_string(), Value::Object(function_obj));
     true
 }
 

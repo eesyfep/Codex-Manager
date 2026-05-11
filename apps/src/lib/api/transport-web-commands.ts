@@ -255,6 +255,7 @@ export function createWebCommandMap(
     service_usage_refresh: { rpcMethod: "account/usage/refresh" },
     service_usage_aggregate: { rpcMethod: "account/usage/aggregate" },
     service_aggregate_api_list: { rpcMethod: "aggregateApi/list" },
+    service_aggregate_api_model_usage: { rpcMethod: "aggregateApi/modelUsage" },
     service_aggregate_api_create: { rpcMethod: "aggregateApi/create" },
     service_aggregate_api_update: { rpcMethod: "aggregateApi/update" },
     service_aggregate_api_delete: { rpcMethod: "aggregateApi/delete" },
@@ -262,6 +263,28 @@ export function createWebCommandMap(
     service_aggregate_api_test_connection: {
       rpcMethod: "aggregateApi/testConnection",
     },
+    service_model_router_session_list: { rpcMethod: "modelRouter/session/list" },
+    service_model_router_session_update_model: {
+      rpcMethod: "modelRouter/session/updateModel",
+    },
+    service_model_router_session_apply_latest_for_workspace: {
+      rpcMethod: "modelRouter/session/applyLatestForWorkspace",
+    },
+    service_model_router_workspace_default_set: {
+      rpcMethod: "modelRouter/workspaceDefault/set",
+    },
+    service_model_router_workspace_default_delete: {
+      rpcMethod: "modelRouter/workspaceDefault/delete",
+    },
+    service_model_router_binding_list: { rpcMethod: "modelRouter/binding/list" },
+    service_model_router_binding_save: { rpcMethod: "modelRouter/binding/save" },
+    service_model_router_binding_delete: { rpcMethod: "modelRouter/binding/delete" },
+    service_model_router_probe_run: { rpcMethod: "modelRouter/probe/run" },
+    service_model_router_probe_apply: { rpcMethod: "modelRouter/probe/apply" },
+    service_model_router_probe_apply_selected: {
+      rpcMethod: "modelRouter/probe/applySelected",
+    },
+    service_model_router_probe_list: { rpcMethod: "modelRouter/probe/list" },
     service_login_start: {
       rpcMethod: "account/login/start",
       mapParams: (params) => ({

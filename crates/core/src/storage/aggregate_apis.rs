@@ -1,4 +1,4 @@
-use rusqlite::{Result, Row};
+use rusqlite::{params, Result, Row};
 
 use super::{now_ts, AggregateApi, Storage};
 
@@ -11,6 +11,13 @@ const AGGREGATE_API_SELECT_SQL: &str = "SELECT
     auth_type,
     auth_params_json,
     action,
+    pool,
+    wool_max_inflight,
+    wool_cooldown_until,
+    wool_failure_count,
+    wool_last_preflight_at,
+    fast,
+    compatibility_mode,
     status,
     created_at,
     updated_at,
@@ -43,14 +50,21 @@ impl Storage {
                 auth_type,
                 auth_params_json,
                 action,
+                pool,
+                wool_max_inflight,
+                wool_cooldown_until,
+                wool_failure_count,
+                wool_last_preflight_at,
+                fast,
+                compatibility_mode,
                 status,
                 created_at,
                 updated_at,
                 last_test_at,
                 last_test_status,
                 last_test_error
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-            (
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            params![
                 &api.id,
                 &api.provider_type,
                 &api.supplier_name,
@@ -59,13 +73,20 @@ impl Storage {
                 &api.auth_type,
                 &api.auth_params_json,
                 &api.action,
+                &api.pool,
+                &api.wool_max_inflight,
+                &api.wool_cooldown_until,
+                api.wool_failure_count,
+                &api.wool_last_preflight_at,
+                api.fast,
+                api.compatibility_mode,
                 &api.status,
                 api.created_at,
                 api.updated_at,
                 &api.last_test_at,
                 &api.last_test_status,
                 &api.last_test_error,
-            ),
+            ],
         )?;
         Ok(())
     }
@@ -243,6 +264,77 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_aggregate_api_pool(&self, api_id: &str, pool: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE aggregate_apis SET pool = ?1, updated_at = ?2 WHERE id = ?3",
+            (pool, now_ts(), api_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_aggregate_api_wool_max_inflight(
+        &self,
+        api_id: &str,
+        wool_max_inflight: Option<i64>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE aggregate_apis SET wool_max_inflight = ?1, updated_at = ?2 WHERE id = ?3",
+            (wool_max_inflight, now_ts(), api_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_aggregate_api_fast(&self, api_id: &str, fast: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE aggregate_apis SET fast = ?1, updated_at = ?2 WHERE id = ?3",
+            (fast, now_ts(), api_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_aggregate_api_compatibility_mode(
+        &self,
+        api_id: &str,
+        compatibility_mode: bool,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE aggregate_apis SET compatibility_mode = ?1, updated_at = ?2 WHERE id = ?3",
+            (compatibility_mode, now_ts(), api_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_aggregate_api_wool_preflight_success(&self, api_id: &str) -> Result<()> {
+        let now = now_ts();
+        self.conn.execute(
+            "UPDATE aggregate_apis
+             SET wool_last_preflight_at = ?1,
+                 wool_failure_count = 0,
+                 wool_cooldown_until = NULL,
+                 updated_at = ?1
+             WHERE id = ?2",
+            (now, api_id),
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_aggregate_api_wool_failure(
+        &self,
+        api_id: &str,
+        cooldown_until: Option<i64>,
+    ) -> Result<()> {
+        let now = now_ts();
+        self.conn.execute(
+            "UPDATE aggregate_apis
+             SET wool_failure_count = COALESCE(wool_failure_count, 0) + 1,
+                 wool_cooldown_until = ?1,
+                 updated_at = ?2
+             WHERE id = ?3",
+            (cooldown_until, now, api_id),
+        )?;
+        Ok(())
+    }
+
     /// 函数 `delete_aggregate_api`
     ///
     /// 作者: gaohongshun
@@ -382,6 +474,13 @@ impl Storage {
                 auth_type TEXT NOT NULL DEFAULT 'apikey',
                 auth_params_json TEXT,
                 action TEXT,
+                pool TEXT NOT NULL DEFAULT 'primary',
+                wool_max_inflight INTEGER,
+                wool_cooldown_until INTEGER,
+                wool_failure_count INTEGER NOT NULL DEFAULT 0,
+                wool_last_preflight_at INTEGER,
+                fast INTEGER NOT NULL DEFAULT 0,
+                compatibility_mode INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
@@ -405,6 +504,9 @@ impl Storage {
         )?;
         self.ensure_column("aggregate_apis", "auth_params_json", "TEXT")?;
         self.ensure_column("aggregate_apis", "action", "TEXT")?;
+        self.ensure_aggregate_api_wool_columns()?;
+        self.ensure_aggregate_api_fast_column()?;
+        self.ensure_aggregate_api_compatibility_mode_column()?;
         self.conn.execute(
             "UPDATE aggregate_apis
              SET provider_type = COALESCE(NULLIF(TRIM(provider_type), ''), 'codex')
@@ -421,6 +523,57 @@ impl Storage {
             "UPDATE aggregate_apis
              SET sort = COALESCE(sort, 0)
              WHERE sort IS NULL",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_aggregate_api_wool_columns(&self) -> Result<()> {
+        self.ensure_column("aggregate_apis", "pool", "TEXT NOT NULL DEFAULT 'primary'")?;
+        self.ensure_column("aggregate_apis", "wool_max_inflight", "INTEGER")?;
+        self.ensure_column("aggregate_apis", "wool_cooldown_until", "INTEGER")?;
+        self.ensure_column(
+            "aggregate_apis",
+            "wool_failure_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column("aggregate_apis", "wool_last_preflight_at", "INTEGER")?;
+        self.conn.execute(
+            "UPDATE aggregate_apis
+             SET pool = 'primary'
+             WHERE pool IS NULL OR TRIM(pool) = '' OR pool NOT IN ('primary', 'wool')",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE aggregate_apis
+             SET wool_failure_count = COALESCE(wool_failure_count, 0)
+             WHERE wool_failure_count IS NULL",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_aggregate_api_fast_column(&self) -> Result<()> {
+        self.ensure_column("aggregate_apis", "fast", "INTEGER NOT NULL DEFAULT 0")?;
+        self.conn.execute(
+            "UPDATE aggregate_apis
+             SET fast = COALESCE(fast, 0)
+             WHERE fast IS NULL",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_aggregate_api_compatibility_mode_column(&self) -> Result<()> {
+        self.ensure_column(
+            "aggregate_apis",
+            "compatibility_mode",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.conn.execute(
+            "UPDATE aggregate_apis
+             SET compatibility_mode = COALESCE(compatibility_mode, 0)
+             WHERE compatibility_mode IS NULL",
             [],
         )?;
         Ok(())
@@ -476,11 +629,18 @@ fn map_aggregate_api_row(row: &Row<'_>) -> Result<AggregateApi> {
         auth_type: row.get(5)?,
         auth_params_json: row.get(6)?,
         action: row.get(7)?,
-        status: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
-        last_test_at: row.get(11)?,
-        last_test_status: row.get(12)?,
-        last_test_error: row.get(13)?,
+        pool: row.get(8)?,
+        wool_max_inflight: row.get(9)?,
+        wool_cooldown_until: row.get(10)?,
+        wool_failure_count: row.get(11)?,
+        wool_last_preflight_at: row.get(12)?,
+        fast: row.get(13)?,
+        compatibility_mode: row.get(14)?,
+        status: row.get(15)?,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+        last_test_at: row.get(18)?,
+        last_test_status: row.get(19)?,
+        last_test_error: row.get(20)?,
     })
 }

@@ -1,11 +1,13 @@
 use codexmanager_core::storage::Storage;
 use rand::RngCore;
+use rusqlite::{backup::Backup, Connection};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 struct CachedStorage {
     path: String,
@@ -268,6 +270,21 @@ pub(crate) fn generate_aggregate_api_id() -> String {
     out
 }
 
+pub(crate) fn generate_model_router_id(prefix: &str) -> String {
+    let mut buf = [0u8; 8];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    let normalized_prefix = prefix.trim().trim_end_matches('_');
+    let mut out = if normalized_prefix.is_empty() {
+        String::from("mr_")
+    } else {
+        format!("{normalized_prefix}_")
+    };
+    for b in buf {
+        out.push_str(&format!("{:02x}", b));
+    }
+    out
+}
+
 #[cfg(test)]
 static STORAGE_OPEN_COUNTS: std::sync::OnceLock<std::sync::Mutex<HashMap<String, usize>>> =
     std::sync::OnceLock::new();
@@ -306,7 +323,7 @@ pub(crate) fn open_storage() -> Option<StorageHandle> {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn open_storage_at_path(path: &str) -> Option<StorageHandle> {
+pub(crate) fn open_storage_at_path(path: &str) -> Option<StorageHandle> {
     if let Some(storage) = take_cached_storage(&path) {
         return Some(StorageHandle::new(path.to_string(), storage));
     }
@@ -343,11 +360,141 @@ pub(crate) fn initialize_storage() -> Result<(), String> {
     if !Path::new(&path).exists() {
         log::warn!("storage path missing: {}", path);
     }
+    backup_before_model_router_migration_if_needed(Path::new(&path))?;
     let storage =
         Storage::open(&path).map_err(|err| format!("open storage failed: {} ({})", path, err))?;
     storage
         .init()
         .map_err(|err| format!("storage init failed: {} ({})", path, err))?;
+    Ok(())
+}
+
+pub(crate) fn storage_is_empty(path: &Path) -> Result<bool, String> {
+    let storage = Storage::open(path).map_err(|err| {
+        format!(
+            "open storage for empty check failed: {} ({})",
+            path.display(),
+            err
+        )
+    })?;
+    storage
+        .init()
+        .map_err(|err| format!("storage init failed: {} ({})", path.display(), err))?;
+    let account_count = storage
+        .list_accounts()
+        .map_err(|err| format!("count accounts failed: {err}"))?
+        .len();
+    let api_key_count = storage
+        .list_api_keys()
+        .map_err(|err| format!("count api keys failed: {err}"))?
+        .len();
+    let aggregate_api_count = storage
+        .list_aggregate_apis()
+        .map_err(|err| format!("count aggregate apis failed: {err}"))?
+        .len();
+    let request_log_count = storage
+        .count_request_logs(None, None, None, None)
+        .map_err(|err| format!("count request logs failed: {err}"))?;
+    Ok(account_count == 0
+        && api_key_count == 0
+        && aggregate_api_count == 0
+        && request_log_count == 0)
+}
+
+fn backup_before_model_router_migration_if_needed(path: &Path) -> Result<(), String> {
+    if !path.is_file() {
+        return Ok(());
+    }
+    if migration_already_applied(path, "053_model_router")? {
+        return Ok(());
+    }
+    let backup_path = migration_backup_path(path, "053_model_router");
+    copy_sqlite_snapshot(path, &backup_path)?;
+    log::info!(
+        "created pre-migration backup for 053_model_router: {} -> {}",
+        path.display(),
+        backup_path.display()
+    );
+    Ok(())
+}
+
+fn migration_already_applied(path: &Path, version: &str) -> Result<bool, String> {
+    let conn = Connection::open(path).map_err(|err| {
+        format!(
+            "open storage for migration check failed: {} ({})",
+            path.display(),
+            err
+        )
+    })?;
+    conn.busy_timeout(Duration::from_millis(3000))
+        .map_err(|err| {
+            format!(
+                "configure migration check failed: {} ({})",
+                path.display(),
+                err
+            )
+        })?;
+    let has_table = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations' LIMIT 1",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_table {
+        return Ok(false);
+    }
+    let applied = conn
+        .query_row(
+            "SELECT 1 FROM schema_migrations WHERE version = ?1 LIMIT 1",
+            [version],
+            |_| Ok(()),
+        )
+        .is_ok();
+    Ok(applied)
+}
+
+fn migration_backup_path(path: &Path, migration: &str) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("codexmanager");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    parent.join(format!("{stem}.{migration}.{ts}.bak.db"))
+}
+
+fn copy_sqlite_snapshot(source: &Path, target: &Path) -> Result<(), String> {
+    let source_conn = Connection::open(source)
+        .map_err(|err| format!("open source db {} failed: {err}", source.display()))?;
+    source_conn
+        .busy_timeout(Duration::from_millis(3000))
+        .map_err(|err| format!("configure source db {} failed: {err}", source.display()))?;
+    let mut target_conn = Connection::open(target)
+        .map_err(|err| format!("open backup db {} failed: {err}", target.display()))?;
+    target_conn
+        .busy_timeout(Duration::from_millis(3000))
+        .map_err(|err| format!("configure backup db {} failed: {err}", target.display()))?;
+    let backup = Backup::new(&source_conn, &mut target_conn).map_err(|err| {
+        format!(
+            "create sqlite backup {} -> {} failed: {err}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    backup
+        .run_to_completion(64, Duration::from_millis(25), None)
+        .map_err(|err| {
+            format!(
+                "run sqlite backup {} -> {} failed: {err}",
+                source.display(),
+                target.display()
+            )
+        })?;
     Ok(())
 }
 

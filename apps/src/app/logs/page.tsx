@@ -43,6 +43,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { accountClient } from "@/lib/api/account-client";
+import { modelRouterClient } from "@/lib/api/model-router";
 import {
   buildStartupSnapshotQueryKey,
   STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT,
@@ -67,6 +68,7 @@ import {
   RequestLogListResult,
   StartupSnapshot,
 } from "@/types";
+import type { SessionModelSummary } from "@/types/model-router";
 
 type StatusFilter = "all" | "2xx" | "4xx" | "5xx";
 type LogsTab = "requests" | "gateway-errors";
@@ -402,6 +404,27 @@ function resolveDisplayRequestPath(log: RequestLog): string {
     return originalPath;
   }
   return String(log.path || log.requestPath || "").trim();
+}
+
+function shortenSessionId(sessionId: string): string {
+  const value = sessionId.trim();
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 10)}...${value.slice(-6)}`;
+}
+
+function resolveRequestLogProjectSessionLabel(
+  log: RequestLog,
+  sessionsByThreadId: Map<string, SessionModelSummary>,
+  t: TranslateFn,
+): string {
+  const sessionId = String(log.sessionId || log.conversationId || "").trim();
+  const session = sessionId ? sessionsByThreadId.get(sessionId) : undefined;
+  const project =
+    String(log.projectName || session?.workspace || "").trim() || "-";
+  const sessionName =
+    String(log.sessionTitle || session?.title || "").trim() ||
+    (sessionId ? shortenSessionId(sessionId) : "-");
+  return `${t("项目")}: ${project}\n${t("会话")}: ${sessionName}\nSession ID: ${sessionId || "-"}`;
 }
 
 /**
@@ -870,7 +893,7 @@ function AccountKeyInfoCell({
               </div>
             </div>
             <div className="space-y-0.5">
-              <div className="text-[10px] text-background/70">{t("密钥")}</div>
+              <div className="text-[10px] text-background/70">平台 Key ID</div>
               <div className="break-all font-mono text-[11px]">
                 {log.keyId || "-"}
               </div>
@@ -1108,16 +1131,78 @@ function ErrorInfoCell({ error }: { error: string }) {
     return <span className="text-muted-foreground">-</span>;
   }
 
+  // Parse structured diagnostic bracket from end of error text, e.g. "[cause=xxx bridge_stage=yyy ...]"
+  const bracketMatch = text.match(/\[([^\]]+)\]$/);
+  const diagnostics: Record<string, string> = {};
+  if (bracketMatch) {
+    for (const kv of bracketMatch[1].split(/\s+/)) {
+      const eqIdx = kv.indexOf("=");
+      if (eqIdx > 0) {
+        diagnostics[kv.slice(0, eqIdx)] = kv.slice(eqIdx + 1);
+      }
+    }
+  }
+  const displayText = bracketMatch
+    ? text.slice(0, text.lastIndexOf("[")).trim()
+    : text;
+  const hasDiagnostics = Object.keys(diagnostics).length > 0;
+
+  const diagnosticLabels: Record<string, string> = {
+    cause: "错误原因",
+    last_sse_event: "最后 SSE 事件",
+    bridge_stage: "桥接阶段",
+    failover_possible: "可故障转移",
+    stream_terminal_seen: "流终止标记",
+  };
+  const diagnosticKeyOrder = [
+    "cause",
+    "last_sse_event",
+    "bridge_stage",
+    "failover_possible",
+    "stream_terminal_seen",
+  ];
+
   return (
     <Tooltip>
       <TooltipTrigger render={<div />} className="block text-left">
         <span className="block max-w-[220px] truncate font-medium text-red-400">
-          {text}
+          {displayText}
         </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-md">
-        <div className="max-w-[360px] break-all font-mono text-[11px]">
-          {text}
+        <div className="flex min-w-[260px] flex-col gap-2">
+          <div className="space-y-0.5">
+            <div className="text-[10px] text-background/70">错误信息</div>
+            <div className="max-w-[360px] break-all font-mono text-[11px]">
+              {displayText}
+            </div>
+          </div>
+          {hasDiagnostics
+            ? diagnosticKeyOrder
+                .filter((key) => key in diagnostics)
+                .map((key) => (
+                  <div key={key} className="space-y-0.5">
+                    <div className="text-[10px] text-background/70">
+                      {diagnosticLabels[key] || key}
+                    </div>
+                    <div className="break-all font-mono text-[11px]">
+                      {diagnostics[key]}
+                    </div>
+                  </div>
+                ))
+            : null}
+          {hasDiagnostics
+            ? Object.keys(diagnostics)
+                .filter((key) => !diagnosticKeyOrder.includes(key))
+                .map((key) => (
+                  <div key={key} className="space-y-0.5">
+                    <div className="text-[10px] text-background/70">{key}</div>
+                    <div className="break-all font-mono text-[11px]">
+                      {diagnostics[key]}
+                    </div>
+                  </div>
+                ))
+            : null}
         </div>
       </TooltipContent>
     </Tooltip>
@@ -1343,7 +1428,7 @@ function LogsPageContent() {
   const { data: accountsResult } = useQuery({
     queryKey: ["accounts", "lookup"],
     queryFn: () => accountClient.list(),
-    enabled: areLogQueriesEnabled && isPageActive,
+    enabled: areLogQueriesEnabled,
     staleTime: 60_000,
     retry: 1,
     placeholderData: (previousData): AccountListResult | undefined =>
@@ -1361,7 +1446,7 @@ function LogsPageContent() {
   const { data: apiKeysResult } = useQuery({
     queryKey: ["apikeys", "lookup"],
     queryFn: () => accountClient.listApiKeys(),
-    enabled: areLogQueriesEnabled && isPageActive,
+    enabled: areLogQueriesEnabled,
     staleTime: 60_000,
     retry: 1,
     placeholderData: (previousData): ApiKey[] | undefined =>
@@ -1371,7 +1456,15 @@ function LogsPageContent() {
   const { data: aggregateApisResult } = useQuery({
     queryKey: ["aggregate-apis", "lookup"],
     queryFn: () => accountClient.listAggregateApis(),
-    enabled: areLogQueriesEnabled && isPageActive,
+    enabled: areLogQueriesEnabled,
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const { data: sessionsResult } = useQuery({
+    queryKey: ["model-router", "sessions", "logs-tooltip", serviceStatus.addr],
+    queryFn: () => modelRouterClient.listSessions(),
+    enabled: areLogQueriesEnabled,
     staleTime: 60_000,
     retry: 1,
   });
@@ -1387,8 +1480,8 @@ function LogsPageContent() {
         page,
         pageSize: pageSizeNumber,
       }),
-    enabled: areLogQueriesEnabled && isPageActive,
-    refetchInterval: 5000,
+    enabled: areLogQueriesEnabled,
+    refetchInterval: isPageActive ? 5000 : false,
     retry: 1,
     placeholderData: (previousData): RequestLogListResult | undefined =>
       previousData ||
@@ -1411,8 +1504,8 @@ function LogsPageContent() {
         startTs,
         endTs,
       }),
-    enabled: areLogQueriesEnabled && isPageActive,
-    refetchInterval: 5000,
+    enabled: areLogQueriesEnabled,
+    refetchInterval: isPageActive ? 5000 : false,
     retry: 1,
     placeholderData: (previousData) =>
       previousData ||
@@ -1420,6 +1513,17 @@ function LogsPageContent() {
         ? buildSummaryPlaceholder(startupRequestLogs)
         : undefined),
   });
+
+  const sessionsByThreadId = useMemo(() => {
+    const map = new Map<string, SessionModelSummary>();
+    for (const session of sessionsResult?.items || []) {
+      const threadId = String(session.threadId || "").trim();
+      if (threadId) {
+        map.set(threadId, session);
+      }
+    }
+    return map;
+  }, [sessionsResult?.items]);
 
   const { data: gatewayLogsResult } = useQuery({
     queryKey: [
@@ -1435,7 +1539,7 @@ function LogsPageContent() {
         pageSize: gatewayPageSizeNumber,
         stageFilter: gatewayStageFilter,
       }),
-    enabled: areLogQueriesEnabled && isPageActive,
+    enabled: areLogQueriesEnabled,
     refetchInterval: 5000,
     retry: 1,
   });
@@ -1937,7 +2041,14 @@ function LogsPageContent() {
                     key={log.id}
                     className="group text-xs hover:bg-muted/20"
                   >
-                    <TableCell className="px-4 py-3 font-mono text-[11px] text-muted-foreground">
+                    <TableCell
+                      className="px-4 py-3 font-mono text-[11px] text-muted-foreground"
+                      title={resolveRequestLogProjectSessionLabel(
+                        log,
+                        sessionsByThreadId,
+                        t,
+                      )}
+                    >
                       {formatTsFromSeconds(log.createdAt, t("未知时间"))}
                     </TableCell>
                     <TableCell className="px-4 py-3 align-top">

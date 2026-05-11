@@ -11,7 +11,20 @@ pub const APP_SETTING_SERVICE_ADDR_KEY: &str = "app.service_addr";
 pub const APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY: &str = "gateway.route_strategy";
 pub const APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY: &str = "gateway.free_account_max_model";
 pub const APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY: &str = "gateway.model_forward_rules";
+pub const APP_SETTING_MODEL_ROUTER_PROBE_FALLBACK_MODELS_KEY: &str =
+    "model_router.probe_fallback_models";
 pub const APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY: &str = "gateway.account_max_inflight";
+pub const APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY: &str =
+    "gateway.account_cooldown_seconds";
+pub const APP_SETTING_GATEWAY_WOOL_ENABLED_KEY: &str = "gateway.wool.enabled";
+pub const APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY: &str =
+    "gateway.wool.max_inflight_per_api";
+pub const APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY: &str = "gateway.wool.pool_max_inflight";
+pub const APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY: &str = "gateway.wool.preflight_workers";
+pub const APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY: &str = "gateway.wool.cooldown_seconds";
+pub const APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY: &str =
+    "gateway.wool.preflight_ttl_seconds";
+pub const APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY: &str = "gateway.wool.failure_threshold";
 pub const APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY: &str =
     "gateway.request_compression_enabled";
 pub const APP_SETTING_GATEWAY_ORIGINATOR_KEY: &str = "gateway.originator";

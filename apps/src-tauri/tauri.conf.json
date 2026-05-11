@@ -26,6 +26,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "windows": {
+      "nsis": {
+        "installerHooks": "gen/nsis-webview2-loader-hook.nsh"
+      }
+    },
     "icon": [
       "icons/icon.ico",
       "icons/icon.png",

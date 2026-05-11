@@ -123,6 +123,7 @@ fn respond_aggregate_route_error(
     model_for_log: Option<&str>,
     reasoning_for_log: Option<&str>,
     started_at: Instant,
+    conversation_id: Option<&str>,
     message: String,
 ) -> Result<(), String> {
     super::super::record_gateway_request_outcome(path, 404, Some("aggregate_api"));
@@ -138,6 +139,7 @@ fn respond_aggregate_route_error(
         storage,
         super::super::request_log::RequestLogTraceContext {
             trace_id: Some(trace_id),
+            conversation_id,
             original_path: Some(original_path),
             adapted_path: Some(path),
             response_adapter: Some(response_adapter),
@@ -186,13 +188,14 @@ fn proxy_with_aggregate_candidates(
     aggregate_api_id: Option<&str>,
     request_deadline: Option<Instant>,
     started_at: Instant,
+    conversation_id: Option<&str>,
     aggregate_api_candidates: Vec<codexmanager_core::storage::AggregateApi>,
 ) -> Result<(), String> {
-    let mut aggregate_api_candidates = aggregate_api_candidates;
-    super::protocol::aggregate_api::apply_gateway_route_strategy_to_aggregate_candidates(
-        &mut aggregate_api_candidates,
-        key_id,
+    let aggregate_api_candidates = ordered_aggregate_candidates_for_proxy(
+        storage,
         model_for_log,
+        aggregate_api_candidates,
+        key_id,
         aggregate_api_id,
     );
 
@@ -212,11 +215,37 @@ fn proxy_with_aggregate_candidates(
             model_for_log,
             reasoning_for_log,
             effective_service_tier_for_log,
+            conversation_id,
             aggregate_api_candidates,
             request_deadline,
             started_at,
         },
     )
+}
+
+fn ordered_aggregate_candidates_for_proxy(
+    storage: &codexmanager_core::storage::Storage,
+    model_for_log: Option<&str>,
+    aggregate_api_candidates: Vec<codexmanager_core::storage::AggregateApi>,
+    key_id: &str,
+    aggregate_api_id: Option<&str>,
+) -> Vec<codexmanager_core::storage::AggregateApi> {
+    let mut aggregate_api_candidates = aggregate_api_candidates;
+    if crate::model_router::model_route_applies_for_model(storage, model_for_log) {
+        aggregate_api_candidates = crate::model_router::route_aggregate_candidates_for_model(
+            storage,
+            model_for_log,
+            aggregate_api_candidates,
+            key_id,
+        );
+    }
+    super::protocol::aggregate_api::apply_gateway_route_strategy_to_aggregate_candidates(
+        &mut aggregate_api_candidates,
+        key_id,
+        model_for_log,
+        aggregate_api_id,
+    );
+    aggregate_api_candidates
 }
 
 /// 函数 `proxy_validated_request`
@@ -244,6 +273,7 @@ pub(in super::super) fn proxy_validated_request(
         body,
         is_stream,
         has_prompt_cache_key,
+        conversation_id,
         request_shape,
         protocol_type,
         rotation_strategy,
@@ -331,6 +361,7 @@ pub(in super::super) fn proxy_validated_request(
                     aggregate_api_id.as_deref(),
                     request_deadline,
                     started_at,
+                    conversation_id.as_deref(),
                     aggregate_api_candidates,
                 );
             }
@@ -353,6 +384,7 @@ pub(in super::super) fn proxy_validated_request(
                     model_for_log.as_deref(),
                     reasoning_for_log.as_deref(),
                     started_at,
+                    conversation_id.as_deref(),
                     err,
                 );
             }
@@ -373,6 +405,7 @@ pub(in super::super) fn proxy_validated_request(
                     model_for_log.as_deref(),
                     reasoning_for_log.as_deref(),
                     started_at,
+                    conversation_id.as_deref(),
                     crate::gateway::bilingual_error(
                         format!(
                             "未配置 {provider_name} 上游 Provider，请添加 provider_type={provider_type} 的 Aggregate API"
@@ -526,12 +559,14 @@ pub(in super::super) fn proxy_validated_request(
 #[cfg(test)]
 mod tests {
     use super::{
-        exhausted_gateway_error_for_log, provider_upstream_hint, resolve_upstream_is_stream,
+        exhausted_gateway_error_for_log, ordered_aggregate_candidates_for_proxy,
+        provider_upstream_hint, resolve_upstream_is_stream,
         should_try_provider_executor_aggregate_route,
     };
     use crate::gateway::upstream::executor::{
         GatewayUpstreamExecutionPlan, GatewayUpstreamExecutorKind, GatewayUpstreamRouteKind,
     };
+    use codexmanager_core::storage::{now_ts, AggregateApi, ModelRouteBinding, Storage};
 
     /// 函数 `exhausted_gateway_error_includes_attempts_skips_and_last_error`
     ///
@@ -644,5 +679,122 @@ mod tests {
             provider_upstream_hint(GatewayUpstreamExecutorKind::CodexResponses),
             None
         );
+    }
+
+    fn aggregate_api(id: &str, sort: i64) -> AggregateApi {
+        AggregateApi {
+            id: id.to_string(),
+            provider_type: crate::aggregate_api::AGGREGATE_API_PROVIDER_CODEX.to_string(),
+            supplier_name: Some(id.to_string()),
+            sort,
+            url: format!("https://{id}.example.com"),
+            auth_type: crate::aggregate_api::AGGREGATE_API_AUTH_APIKEY.to_string(),
+            auth_params_json: None,
+            action: None,
+            pool: "primary".to_string(),
+            wool_max_inflight: None,
+            wool_cooldown_until: None,
+            wool_failure_count: 0,
+            wool_last_preflight_at: None,
+            fast: false,
+            compatibility_mode: false,
+            status: "active".to_string(),
+            created_at: sort,
+            updated_at: sort,
+            last_test_at: None,
+            last_test_status: None,
+            last_test_error: None,
+        }
+    }
+
+    fn route_binding(
+        id: &str,
+        model: &str,
+        aggregate_api_id: &str,
+        priority: i64,
+    ) -> ModelRouteBinding {
+        let now = now_ts();
+        ModelRouteBinding {
+            id: id.to_string(),
+            model: model.to_string(),
+            aggregate_api_id: aggregate_api_id.to_string(),
+            enabled: true,
+            priority,
+            weight: 1,
+            route_strategy: "ordered".to_string(),
+            manual_preferred: false,
+            supports_responses: true,
+            supports_chat_completions: true,
+            requires_adapter: false,
+            last_probe_status: None,
+            last_error: None,
+            last_success_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn ids(items: &[AggregateApi]) -> Vec<String> {
+        items.iter().map(|item| item.id.clone()).collect()
+    }
+
+    #[test]
+    fn model_route_candidates_still_use_global_balanced_strategy() {
+        let _guard = crate::test_env_guard();
+        let previous = std::env::var("CODEXMANAGER_ROUTE_STRATEGY").ok();
+        std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", "balanced");
+        crate::gateway::reload_runtime_config_from_env();
+
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        for api in [
+            aggregate_api("agg-first", 0),
+            aggregate_api("agg-second", 1),
+            aggregate_api("agg-third", 2),
+        ] {
+            storage.insert_aggregate_api(&api).expect("insert api");
+        }
+        for binding in [
+            route_binding("mrb-first", "gpt-5.5", "agg-first", 0),
+            route_binding("mrb-second", "gpt-5.5", "agg-second", 1),
+            route_binding("mrb-third", "gpt-5.5", "agg-third", 2),
+        ] {
+            storage
+                .upsert_model_route_binding(&binding)
+                .expect("insert binding");
+        }
+
+        let first = ordered_aggregate_candidates_for_proxy(
+            &storage,
+            Some("gpt-5.5"),
+            vec![
+                aggregate_api("agg-first", 0),
+                aggregate_api("agg-second", 1),
+                aggregate_api("agg-third", 2),
+            ],
+            "key-model-route-balanced",
+            None,
+        );
+        let second = ordered_aggregate_candidates_for_proxy(
+            &storage,
+            Some("gpt-5.5"),
+            vec![
+                aggregate_api("agg-first", 0),
+                aggregate_api("agg-second", 1),
+                aggregate_api("agg-third", 2),
+            ],
+            "key-model-route-balanced",
+            None,
+        );
+
+        assert_eq!(ids(&first), vec!["agg-first", "agg-second", "agg-third"]);
+        assert_eq!(ids(&second), vec!["agg-second", "agg-third", "agg-first"]);
+
+        if let Some(value) = previous {
+            std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", value);
+        } else {
+            std::env::remove_var("CODEXMANAGER_ROUTE_STRATEGY");
+        }
+        crate::gateway::reload_runtime_config_from_env();
     }
 }

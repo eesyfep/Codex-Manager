@@ -20,6 +20,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  SearchableModelPicker,
+  type SearchableModelOption,
+} from "@/components/searchable-model-picker";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { accountClient } from "@/lib/api/account-client";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -29,7 +33,7 @@ import { findBestMatchingModel } from "@/lib/api/model-catalog";
 import { toast } from "sonner";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { Key, Clipboard, ShieldCheck } from "lucide-react";
-import { ApiKey } from "@/types";
+import { ApiKey, ManagedModelInfo, ModelInfo } from "@/types";
 
 const PROTOCOL_LABELS: Record<string, string> = {
   openai_compat: "通配兼容 (Codex / Claude Code / Gemini CLI)",
@@ -129,13 +133,41 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
     enabled: open && isServiceReady,
   });
 
+  const { data: managedCatalog } = useQuery({
+    queryKey: ["managed-model-catalog", serviceStatus.addr],
+    queryFn: async () => {
+      const cached = await accountClient.listManagedModels(false);
+      if ((cached.items || []).length > 0) {
+        return cached;
+      }
+      try {
+        return await accountClient.listManagedModels(true);
+      } catch {
+        return cached;
+      }
+    },
+    enabled: open && isServiceReady,
+    retry: 1,
+  });
+
   const selectedModelInfo = useMemo(
     () => findBestMatchingModel(models?.models || [], modelSlug),
     [modelSlug, models?.models],
   );
 
+  const mergedModels = useMemo(() => {
+    const merged = new Map<string, ModelInfo | ManagedModelInfo>();
+    (models?.models || []).forEach((item) => merged.set(item.slug, item));
+    (managedCatalog?.items || []).forEach((item) => {
+      if (!merged.has(item.slug)) {
+        merged.set(item.slug, item);
+      }
+    });
+    return Array.from(merged.values()).filter(Boolean);
+  }, [managedCatalog?.items, models?.models]);
+
   const visibleModels = useMemo(() => {
-    const catalog = models?.models || [];
+    const catalog = mergedModels;
     const selectedSlug = String(modelSlug || "").trim();
     const baseModels = catalog.filter((model) => {
       if (model.supportedInApi) {
@@ -154,11 +186,25 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
       ];
     }
     return baseModels;
-  }, [models?.models, selectedModelInfo]);
+  }, [mergedModels, modelSlug, selectedModelInfo]);
 
-  const modelLabelMap = Object.fromEntries(
-    visibleModels.map((model) => [model.slug, model.displayName || model.slug]),
-  );
+  const modelOptions = useMemo<SearchableModelOption[]>(() => {
+    const options: SearchableModelOption[] = [
+      {
+        value: "auto",
+        label: t("跟随请求"),
+        keywords: ["auto", "follow request"],
+      },
+    ];
+    visibleModels.forEach((model) => {
+      options.push({
+        value: model.slug,
+        label: model.displayName || model.slug,
+        keywords: [model.slug, model.displayName || model.slug],
+      });
+    });
+    return options;
+  }, [t, visibleModels]);
 
   useEffect(() => {
     if (!open) return;
@@ -406,33 +452,18 @@ export function ApiKeyModal({ open, onOpenChange, apiKey }: ApiKeyModalProps) {
             </div>
             <div className="grid gap-2 content-start">
               <Label>{t("绑定模型 (可选)")}</Label>
-              <Select
-                value={modelSlug}
-                onValueChange={(val) => val && setModelSlug(val)}
+              <SearchableModelPicker
+                value={modelSlug || "auto"}
+                onValueChange={(val) => setModelSlug(val === "auto" ? "" : val)}
+                options={modelOptions}
+                placeholder={t("跟随请求")}
+                searchPlaceholder={t("搜索模型 slug 或显示名称")}
+                emptyLabel={t("没有匹配的模型")}
                 disabled={!isServiceReady}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder={t("跟随请求")}>
-                    {(value) => {
-                      const nextValue = String(value || "").trim();
-                      if (!nextValue || nextValue === "auto") return t("跟随请求");
-                      const resolvedModel = findBestMatchingModel(
-                        models?.models || [],
-                        nextValue,
-                      );
-                      return resolvedModel?.displayName || modelLabelMap[nextValue] || nextValue;
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent align="start">
-                  <SelectItem value="auto">{t("跟随请求")}</SelectItem>
-                  {visibleModels.map((model) => (
-                    <SelectItem key={model.slug} value={model.slug}>
-                      {model.displayName || model.slug}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                allowCustomValue
+                customValuePrefix={t("使用输入值")}
+                triggerClassName="h-9"
+              />
               <p className="text-[11px] text-muted-foreground">
                 {t("选择“跟随请求”时，会使用请求体里的实际模型；请求日志展示的是最终生效模型。")}
               </p>

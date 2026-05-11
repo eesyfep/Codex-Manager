@@ -156,6 +156,13 @@ export function serializeManagedModelForRpc(
     minimal_client_version: model.minimalClientVersion,
     supports_search_tool: model.supportsSearchTool,
     available_in_plans: model.availableInPlans,
+    source_kind:
+      "sourceKind" in model ? normalizeNullableString(model.sourceKind) : null,
+    user_edited: "userEdited" in model ? Boolean(model.userEdited) : null,
+    sort_index:
+      "sortIndex" in model && Number.isFinite(model.sortIndex) ? model.sortIndex : null,
+    updated_at:
+      "updatedAt" in model && Number.isFinite(model.updatedAt) ? model.updatedAt : null,
   };
 }
 
@@ -246,6 +253,23 @@ function serializeModelForCodexCache(
   };
 }
 
+export function buildCodexAppVisibleModel(
+  model: ManagedModelInfo | ModelInfo
+): Record<string, unknown> | null {
+  if (!isModelVisibleForCodexApp(model)) {
+    return null;
+  }
+  return serializeModelForCodexCache(model);
+}
+
+function isModelVisibleForCodexApp(model: ManagedModelInfo | ModelInfo): boolean {
+  if (!model.supportedInApi) {
+    return false;
+  }
+  const visibility = String(model.visibility || "").trim().toLowerCase();
+  return visibility !== "hide" && visibility !== "hidden";
+}
+
 function readModelSortIndex(model: ManagedModelInfo | ModelInfo): number {
   if ("sortIndex" in model && typeof model.sortIndex === "number") {
     return model.sortIndex;
@@ -269,7 +293,14 @@ export function serializeManagedModelCatalogForCodexCache(
 
       return left.slug.localeCompare(right.slug);
     })
-    .map((model) => serializeModelForCodexCache(model));
+    .map((model) => buildCodexAppVisibleModel(model))
+    .filter((model): model is Record<string, unknown> => model !== null);
+}
+
+export function serializeManagedModelCatalogForCodexApp(
+  models: Array<ManagedModelInfo | ModelInfo>
+): Array<Record<string, unknown>> {
+  return serializeManagedModelCatalogForCodexCache(models);
 }
 
 export function findBestMatchingModel<T extends { slug: string }>(

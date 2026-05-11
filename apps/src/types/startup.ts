@@ -1,5 +1,9 @@
 import type { Account, AccountUsage, UsageAggregateSummary } from "@/types/account";
-import type { ApiKey } from "@/types/api-key";
+import type {
+  ApiKey,
+  DashboardDailyTokenUsageBucket,
+  DashboardTokenUsage,
+} from "@/types/api-key";
 import type { ModelCatalog } from "@/types/model";
 import type { RequestLog, RequestLogTodaySummary } from "@/types/request-log";
 
@@ -12,4 +16,6 @@ export interface StartupSnapshot {
   manualPreferredAccountId: string;
   requestLogTodaySummary: RequestLogTodaySummary;
   requestLogs: RequestLog[];
+  dashboardTokenUsage: DashboardTokenUsage[];
+  dashboardDailyTokenUsage: DashboardDailyTokenUsageBucket[];
 }

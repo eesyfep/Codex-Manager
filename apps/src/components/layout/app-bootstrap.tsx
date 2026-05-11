@@ -31,7 +31,7 @@ import {
   normalizeRoutePath,
 } from "@/lib/utils/static-routes";
 
-const DEFAULT_SERVICE_ADDR = "localhost:48760";
+const DEFAULT_SERVICE_ADDR = "127.0.0.1:48760";
 const STARTUP_WARMUP_LABEL = "[startup warmup]";
 /**
  * 函数 `sleep`
@@ -156,9 +156,12 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
         ),
         queryFn: () =>
           serviceClient.getStartupSnapshot({
-            requestLogLimit: STARTUP_SNAPSHOT_REQUEST_LOG_LIMIT,
+            requestLogLimit: 0,
             dayStartTs: localDayRange.dayStartTs,
             dayEndTs: localDayRange.dayEndTs,
+            includeApiModels: false,
+            includeRequestLogs: false,
+            includeDashboardUsage: false,
           }),
         staleTime: STARTUP_SNAPSHOT_STALE_TIME,
       });
@@ -183,7 +186,12 @@ export function AppBootstrap({ children }: { children: React.ReactNode }) {
     ) => {
       if (options?.blockOnDashboardSnapshot) {
         try {
-          await prefetchStartupSnapshot(addr);
+          void prefetchStartupSnapshot(addr).catch((warmupError) => {
+            console.warn(
+              `${STARTUP_WARMUP_LABEL} initial dashboard snapshot prefetch failed`,
+              warmupError,
+            );
+          });
         } catch (warmupError) {
           console.warn(
             `${STARTUP_WARMUP_LABEL} initial dashboard snapshot prefetch failed`,

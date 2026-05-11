@@ -26,13 +26,21 @@ struct CodexNpmLatestResponse {
 
 use super::{
     normalize_optional_text, save_persisted_app_setting, save_persisted_bool_setting,
-    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
-    APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
-    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
+    APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY, APP_SETTING_GATEWAY_ORIGINATOR_KEY,
+    APP_SETTING_GATEWAY_REQUEST_COMPRESSION_ENABLED_KEY,
     APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
     APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_TOTAL_TIMEOUT_MS_KEY, APP_SETTING_GATEWAY_USER_AGENT_VERSION_KEY,
+    APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY, APP_SETTING_GATEWAY_WOOL_ENABLED_KEY,
+    APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY,
+    APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY,
+    APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY,
+    APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY,
+    APP_SETTING_MODEL_ROUTER_PROBE_FALLBACK_MODELS_KEY,
 };
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -171,6 +179,43 @@ pub fn current_gateway_model_forward_rules() -> String {
     gateway::current_model_forward_rules()
 }
 
+pub fn set_model_router_probe_fallback_models(raw: &str) -> Result<String, String> {
+    let applied = normalize_probe_fallback_models(raw);
+    save_persisted_app_setting(
+        APP_SETTING_MODEL_ROUTER_PROBE_FALLBACK_MODELS_KEY,
+        if applied.is_empty() {
+            None
+        } else {
+            Some(applied.as_str())
+        },
+    )?;
+    Ok(applied)
+}
+
+pub fn current_model_router_probe_fallback_models() -> String {
+    normalize_probe_fallback_models(
+        &crate::app_settings::get_persisted_app_setting(
+            APP_SETTING_MODEL_ROUTER_PROBE_FALLBACK_MODELS_KEY,
+        )
+        .unwrap_or_else(|| "gpt-5.4,gpt-5.5".to_string()),
+    )
+}
+
+fn normalize_probe_fallback_models(raw: &str) -> String {
+    let mut models = Vec::new();
+    for item in raw.split([',', '\n', '\r', ';']) {
+        let value = item.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let value = value.to_ascii_lowercase();
+        if !models.iter().any(|existing: &String| existing == &value) {
+            models.push(value);
+        }
+    }
+    models.join(",")
+}
+
 /// 函数 `set_gateway_account_max_inflight`
 ///
 /// 作者: gaohongshun
@@ -191,6 +236,15 @@ pub fn set_gateway_account_max_inflight(limit: usize) -> Result<usize, String> {
     Ok(applied)
 }
 
+pub fn set_gateway_account_cooldown_seconds(seconds: i64) -> Result<i64, String> {
+    let applied = gateway::set_account_default_cooldown_secs(seconds);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY,
+        Some(&applied.to_string()),
+    )?;
+    Ok(applied)
+}
+
 /// 函数 `current_gateway_account_max_inflight`
 ///
 /// 作者: gaohongshun
@@ -204,6 +258,105 @@ pub fn set_gateway_account_max_inflight(limit: usize) -> Result<usize, String> {
 /// 返回函数执行结果
 pub fn current_gateway_account_max_inflight() -> usize {
     gateway::account_max_inflight_limit()
+}
+
+pub fn current_gateway_account_cooldown_seconds() -> i64 {
+    gateway::current_account_default_cooldown_secs()
+}
+
+pub fn set_gateway_wool_enabled(enabled: bool) -> Result<bool, String> {
+    let applied = gateway::set_wool_enabled(enabled);
+    save_persisted_bool_setting(APP_SETTING_GATEWAY_WOOL_ENABLED_KEY, applied)?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_enabled() -> bool {
+    gateway::wool_enabled()
+}
+
+pub fn set_gateway_wool_max_inflight_per_api(limit: usize) -> Result<usize, String> {
+    let applied = gateway::set_wool_max_inflight_per_api(limit);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY,
+        Some(&applied.to_string()),
+    )?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_max_inflight_per_api() -> usize {
+    gateway::wool_max_inflight_per_api()
+}
+
+pub fn set_gateway_wool_pool_max_inflight(limit: usize) -> Result<usize, String> {
+    let applied = gateway::set_wool_pool_max_inflight(limit);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY,
+        Some(&applied.to_string()),
+    )?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_pool_max_inflight() -> usize {
+    gateway::wool_pool_max_inflight()
+}
+
+pub fn set_gateway_wool_preflight_workers(workers: usize) -> Result<usize, String> {
+    let applied = gateway::set_wool_preflight_workers(workers);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY,
+        Some(&applied.to_string()),
+    )?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_preflight_workers() -> usize {
+    gateway::wool_preflight_workers()
+}
+
+pub fn set_gateway_wool_cooldown_seconds(seconds: u64) -> Result<u64, String> {
+    let applied = gateway::set_wool_cooldown_seconds(seconds);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY,
+        Some(&applied.to_string()),
+    )?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_cooldown_seconds() -> u64 {
+    gateway::wool_cooldown_seconds()
+}
+
+pub fn set_gateway_wool_preflight_ttl_seconds(seconds: u64) -> Result<u64, String> {
+    let applied = gateway::set_wool_preflight_ttl_seconds(seconds);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY,
+        Some(&applied.to_string()),
+    )?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_preflight_ttl_seconds() -> u64 {
+    gateway::wool_preflight_ttl_seconds()
+}
+
+pub fn set_gateway_wool_failure_threshold(threshold: usize) -> Result<usize, String> {
+    let applied = gateway::set_wool_failure_threshold(threshold);
+    save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY,
+        Some(&applied.to_string()),
+    )?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(applied)
+}
+
+pub fn current_gateway_wool_failure_threshold() -> usize {
+    gateway::wool_failure_threshold()
 }
 
 /// 函数 `set_gateway_request_compression_enabled`

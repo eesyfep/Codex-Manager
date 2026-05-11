@@ -6,11 +6,14 @@ import {
   AccountUsage,
   AggregateApi,
   AggregateApiCreateResult,
+  AggregateApiModelUsage,
   AggregateApiSecretResult,
   AggregateApiTestResult,
   ApiKey,
   ApiKeyCreateResult,
   ApiKeyUsageStat,
+  DashboardDailyTokenUsageBucket,
+  DashboardTokenUsage,
   AppSettings,
   BackgroundTaskSettings,
   DeviceAuthInfo,
@@ -61,6 +64,7 @@ const DEFAULT_BACKGROUND_TASKS: BackgroundTaskSettings = {
   httpStreamWorkerFactor: 1,
   httpStreamWorkerMin: 2,
 };
+const DEFAULT_MODEL_ROUTER_PROBE_FALLBACK_MODELS = "gpt-5.4,gpt-5.5";
 
 /**
  * 函数 `asObject`
@@ -114,6 +118,11 @@ function asArray<T = unknown>(payload: unknown): T[] {
  */
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+function asNullableString(value: unknown): string | null {
+  const normalized = asString(value);
+  return normalized ? normalized : null;
 }
 
 /**
@@ -765,6 +774,26 @@ export function normalizeAggregateApi(item: unknown): AggregateApi | null {
       typeof source.action === "string"
         ? source.action
         : asString(source.action) || null,
+    pool:
+      asString(source.pool).toLowerCase() === "wool" ? "wool" : "primary",
+    woolMaxInflight: toNullableNumber(
+      source.woolMaxInflight ?? source.wool_max_inflight
+    ),
+    woolCooldownUntil: toNullableNumber(
+      source.woolCooldownUntil ?? source.wool_cooldown_until
+    ),
+    woolFailureCount: asInteger(
+      source.woolFailureCount ?? source.wool_failure_count,
+      0,
+      0
+    ),
+    woolLastPreflightAt: toNullableNumber(
+      source.woolLastPreflightAt ?? source.wool_last_preflight_at
+    ),
+    fast: asBoolean(source.fast),
+    compatibilityMode: asBoolean(
+      source.compatibilityMode ?? source.compatibility_mode
+    ),
     status: asString(source.status) || "active",
     createdAt: toNullableNumber(source.createdAt ?? source.created_at),
     updatedAt: toNullableNumber(source.updatedAt ?? source.updated_at),
@@ -793,6 +822,62 @@ export function normalizeAggregateApiList(payload: unknown): AggregateApi[] {
   return items
     .map((item) => normalizeAggregateApi(item))
     .filter((item): item is AggregateApi => Boolean(item));
+}
+
+export function normalizeAggregateApiModelUsageList(
+  payload: unknown
+): AggregateApiModelUsage[] {
+  const source = asObject(payload);
+  const items = asArray(source.items ?? payload);
+  return items
+    .map((item) => {
+      const current = asObject(item);
+      const aggregateApiUrl = asString(
+        current.aggregateApiUrl ?? current.aggregate_api_url,
+      );
+      if (!aggregateApiUrl) return null;
+      return {
+        aggregateApiUrl,
+        model:
+          asString(current.model) ||
+          "unknown",
+        requestCount: asInteger(
+          current.requestCount ?? current.request_count,
+          0,
+          0,
+        ),
+        inputTokens: asInteger(
+          current.inputTokens ?? current.input_tokens,
+          0,
+          0,
+        ),
+        cachedInputTokens: asInteger(
+          current.cachedInputTokens ?? current.cached_input_tokens,
+          0,
+          0,
+        ),
+        outputTokens: asInteger(
+          current.outputTokens ?? current.output_tokens,
+          0,
+          0,
+        ),
+        reasoningOutputTokens: asInteger(
+          current.reasoningOutputTokens ?? current.reasoning_output_tokens,
+          0,
+          0,
+        ),
+        totalTokens: asInteger(
+          current.totalTokens ?? current.total_tokens,
+          0,
+          0,
+        ),
+        estimatedCostUsd:
+          toNullableNumber(
+            current.estimatedCostUsd ?? current.estimated_cost_usd,
+          ) ?? 0,
+      };
+    })
+    .filter((item): item is AggregateApiModelUsage => Boolean(item));
 }
 
 /**
@@ -883,6 +968,92 @@ export function normalizeApiKeyUsageStats(payload: unknown): ApiKeyUsageStat[] {
       };
     })
     .filter((item): item is ApiKeyUsageStat => Boolean(item));
+}
+
+export function normalizeDashboardTokenUsage(payload: unknown): DashboardTokenUsage[] {
+  return asArray(payload)
+    .map((item) => {
+      const source = asObject(item);
+      return {
+        keyId: asNullableString(source.keyId ?? source.key_id),
+        keyName: asNullableString(source.keyName ?? source.key_name),
+        accountId: asNullableString(source.accountId ?? source.account_id),
+        accountLabel: asNullableString(source.accountLabel ?? source.account_label),
+        aggregateApiId: asNullableString(
+          source.aggregateApiId ?? source.aggregate_api_id
+        ),
+        aggregateApiSupplierName: asNullableString(
+          source.aggregateApiSupplierName ?? source.aggregate_api_supplier_name
+        ),
+        aggregateApiUrl: asNullableString(
+          source.aggregateApiUrl ?? source.aggregate_api_url
+        ),
+        model: asNullableString(source.model),
+        requestCount: asInteger(source.requestCount ?? source.request_count, 0, 0),
+        inputTokens: asInteger(source.inputTokens ?? source.input_tokens, 0, 0),
+        cachedInputTokens: asInteger(
+          source.cachedInputTokens ?? source.cached_input_tokens,
+          0,
+          0
+        ),
+        outputTokens: asInteger(source.outputTokens ?? source.output_tokens, 0, 0),
+        reasoningOutputTokens: asInteger(
+          source.reasoningOutputTokens ?? source.reasoning_output_tokens,
+          0,
+          0
+        ),
+        totalTokens: asInteger(source.totalTokens ?? source.total_tokens, 0, 0),
+        estimatedCostUsd:
+          toNullableNumber(source.estimatedCostUsd ?? source.estimated_cost_usd) ?? 0,
+        lastUsedAt: toNullableNumber(source.lastUsedAt ?? source.last_used_at),
+      };
+    })
+    .filter((item) => item.totalTokens > 0 || item.estimatedCostUsd > 0);
+}
+
+export function normalizeDashboardDailyTokenUsage(
+  payload: unknown
+): DashboardDailyTokenUsageBucket[] {
+  return asArray(payload)
+    .map((item) => {
+      const source = asObject(item);
+      return {
+        dayStartTs: asInteger(source.dayStartTs ?? source.day_start_ts, 0, 0),
+        sourceKey:
+          asString(source.sourceKey ?? source.source_key) ||
+          asString(source.sourceLabel ?? source.source_label) ||
+          "unknown",
+        sourceLabel:
+          asString(source.sourceLabel ?? source.source_label) ||
+          asString(source.sourceKey ?? source.source_key) ||
+          "未知来源",
+        model: asNullableString(source.model),
+        billableInputTokens: asInteger(
+          source.billableInputTokens ?? source.billable_input_tokens,
+          0,
+          0
+        ),
+        requestCount: asInteger(source.requestCount ?? source.request_count, 0, 0),
+        inputTokens: asInteger(source.inputTokens ?? source.input_tokens, 0, 0),
+        cachedInputTokens: asInteger(
+          source.cachedInputTokens ?? source.cached_input_tokens,
+          0,
+          0
+        ),
+        outputTokens: asInteger(source.outputTokens ?? source.output_tokens, 0, 0),
+        reasoningOutputTokens: asInteger(
+          source.reasoningOutputTokens ?? source.reasoning_output_tokens,
+          0,
+          0
+        ),
+        totalTokens: asInteger(source.totalTokens ?? source.total_tokens, 0, 0),
+        estimatedCostUsd: Math.max(
+          0,
+          toNullableNumber(source.estimatedCostUsd ?? source.estimated_cost_usd) ?? 0
+        ),
+      };
+    })
+    .filter((item) => item.dayStartTs > 0 && (item.totalTokens > 0 || item.estimatedCostUsd > 0));
 }
 
 /**
@@ -1247,6 +1418,7 @@ export function normalizeRequestLog(item: unknown): RequestLog | null {
     traceId,
     keyId,
     accountId,
+    conversationId: asString(source.conversationId ?? source.conversation_id) || null,
     initialAccountId: asString(source.initialAccountId ?? source.initial_account_id),
     attemptedAccountIds: asArray(source.attemptedAccountIds ?? source.attempted_account_ids)
       .map((value) => asString(value))
@@ -1265,6 +1437,9 @@ export function normalizeRequestLog(item: unknown): RequestLog | null {
     method,
     requestType: asString(source.requestType ?? source.request_type) || "http",
     path: requestPath,
+    sessionId: asString(source.sessionId ?? source.session_id) || null,
+    sessionTitle: asString(source.sessionTitle ?? source.session_title) || null,
+    projectName: asString(source.projectName ?? source.project_name) || null,
     model: asString(source.model),
     reasoningEffort: asString(source.reasoningEffort ?? source.reasoning_effort),
     serviceTier: asString(source.serviceTier ?? source.service_tier),
@@ -1576,7 +1751,20 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
       asString(item)
     ),
     modelForwardRules: asString(source.modelForwardRules ?? source.model_forward_rules),
+    modelRouterProbeFallbackModels:
+      asString(
+        source.modelRouterProbeFallbackModels ??
+          source.model_router_probe_fallback_models,
+      ) || DEFAULT_MODEL_ROUTER_PROBE_FALLBACK_MODELS,
     accountMaxInflight: asInteger(source.accountMaxInflight, 1, 0),
+    accountCooldownSeconds: asInteger(source.accountCooldownSeconds, 20, 1),
+    woolEnabled: asBoolean(source.woolEnabled, true),
+    woolMaxInflightPerApi: asInteger(source.woolMaxInflightPerApi, 2, 1),
+    woolPoolMaxInflight: asInteger(source.woolPoolMaxInflight, 6, 1),
+    woolPreflightWorkers: asInteger(source.woolPreflightWorkers, 3, 1),
+    woolCooldownSeconds: asInteger(source.woolCooldownSeconds, 600, 1),
+    woolPreflightTtlSeconds: asInteger(source.woolPreflightTtlSeconds, 300, 1),
+    woolFailureThreshold: asInteger(source.woolFailureThreshold, 1, 1),
     gatewayOriginator:
       asString(source.gatewayOriginator) || DEFAULT_CODEX_ORIGINATOR,
     gatewayOriginatorDefault:
@@ -1640,5 +1828,9 @@ export function normalizeStartupSnapshot(payload: unknown): StartupSnapshot {
     manualPreferredAccountId: asString(source.manualPreferredAccountId),
     requestLogTodaySummary: normalizeTodaySummary(source.requestLogTodaySummary),
     requestLogs: normalizeRequestLogs(source.requestLogs),
+    dashboardTokenUsage: normalizeDashboardTokenUsage(source.dashboardTokenUsage),
+    dashboardDailyTokenUsage: normalizeDashboardDailyTokenUsage(
+      source.dashboardDailyTokenUsage
+    ),
   };
 }

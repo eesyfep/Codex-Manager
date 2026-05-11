@@ -16,6 +16,11 @@ import {
 import { serviceClient } from "@/lib/api/service-client";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { pickBestRecommendations, pickCurrentAccount } from "@/lib/utils/usage";
+import type {
+  DashboardDailyTokenUsageBucket,
+  DashboardTokenUsage,
+} from "@/types/api-key";
+import type { RequestLog } from "@/types/request-log";
 
 /**
  * 函数 `useDashboardStats`
@@ -105,6 +110,14 @@ export function useDashboardStats() {
     data?.requestLogs || []
   );
   const recommendations = pickBestRecommendations(accounts);
+  const dashboardTokenUsage =
+    data?.dashboardTokenUsage?.length
+      ? data.dashboardTokenUsage
+      : buildDashboardTokenUsageFallback(data?.requestLogs || []);
+  const dashboardDailyTokenUsage =
+    data?.dashboardDailyTokenUsage?.length
+      ? data.dashboardDailyTokenUsage
+      : buildDashboardDailyTokenUsageFallback(data?.requestLogs || []);
 
   return {
     stats: {
@@ -127,6 +140,8 @@ export function useDashboardStats() {
     currentAccount,
     recommendations,
     requestLogs: data?.requestLogs || [],
+    dashboardTokenUsage,
+    dashboardDailyTokenUsage,
     isLoading:
       (!isServiceReady && !hasSnapshotData) ||
       (!isSnapshotQueryEnabled && !data) ||
@@ -137,4 +152,125 @@ export function useDashboardStats() {
     isError: snapshotQuery.isError,
     error: snapshotQuery.error,
   };
+}
+
+function localDayStartTs(ts: number): number {
+  const date = new Date(ts * 1000);
+  date.setHours(0, 0, 0, 0);
+  return Math.floor(date.getTime() / 1000);
+}
+
+function buildDashboardDailyTokenUsageFallback(
+  logs: RequestLog[]
+): DashboardDailyTokenUsageBucket[] {
+  const grouped = new Map<string, DashboardDailyTokenUsageBucket>();
+  for (const log of logs) {
+    if (!log.createdAt) continue;
+    const dayStartTs = localDayStartTs(log.createdAt);
+    const sourceKey =
+      log.aggregateApiUrl ||
+      log.upstreamUrl ||
+      log.keyId ||
+      log.accountId ||
+      "unknown";
+    const sourceLabel =
+      log.aggregateApiSupplierName ||
+      log.aggregateApiUrl ||
+      log.keyId ||
+      log.accountId ||
+      "未知来源";
+    const key = `${dayStartTs}\u001f${sourceKey}`;
+    const item =
+      grouped.get(key) ??
+      {
+        dayStartTs,
+        sourceKey,
+        sourceLabel,
+        model: log.model || null,
+        billableInputTokens: 0,
+        requestCount: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+        estimatedCostUsd: 0,
+      };
+    item.requestCount += 1;
+    item.inputTokens += Math.max(0, log.inputTokens || 0);
+    item.cachedInputTokens += Math.max(0, log.cachedInputTokens || 0);
+    item.billableInputTokens += Math.max(
+      0,
+      (log.inputTokens || 0) - (log.cachedInputTokens || 0)
+    );
+    item.outputTokens += Math.max(0, log.outputTokens || 0);
+    item.reasoningOutputTokens += Math.max(0, log.reasoningOutputTokens || 0);
+    item.totalTokens += Math.max(
+      0,
+      log.totalTokens ??
+        Math.max(0, (log.inputTokens || 0) - (log.cachedInputTokens || 0)) +
+          (log.outputTokens || 0)
+    );
+    item.estimatedCostUsd += Math.max(0, log.estimatedCostUsd || 0);
+    grouped.set(key, item);
+  }
+  return Array.from(grouped.values()).sort(
+    (left, right) =>
+      left.dayStartTs - right.dayStartTs || right.totalTokens - left.totalTokens
+  );
+}
+
+function buildDashboardTokenUsageFallback(logs: RequestLog[]): DashboardTokenUsage[] {
+  const grouped = new Map<string, DashboardTokenUsage>();
+  for (const log of logs) {
+    const key = [
+      log.keyId || "",
+      log.accountId || "",
+      log.initialAggregateApiId || "",
+      log.aggregateApiUrl || "",
+      log.model || "",
+    ].join("\u001f");
+    const item =
+      grouped.get(key) ??
+      {
+        keyId: log.keyId || null,
+        keyName: null,
+        accountId: log.accountId || null,
+        accountLabel: null,
+        aggregateApiId: log.initialAggregateApiId || null,
+        aggregateApiSupplierName: log.aggregateApiSupplierName,
+        aggregateApiUrl: log.aggregateApiUrl,
+        model: log.model || null,
+        requestCount: 0,
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+        totalTokens: 0,
+        estimatedCostUsd: 0,
+        lastUsedAt: log.createdAt,
+      };
+    item.requestCount += 1;
+    item.inputTokens += Math.max(0, log.inputTokens || 0);
+    item.cachedInputTokens += Math.max(0, log.cachedInputTokens || 0);
+    item.outputTokens += Math.max(0, log.outputTokens || 0);
+    item.reasoningOutputTokens += Math.max(0, log.reasoningOutputTokens || 0);
+    item.totalTokens += Math.max(
+      0,
+      log.totalTokens ??
+        Math.max(0, (log.inputTokens || 0) - (log.cachedInputTokens || 0)) +
+          (log.outputTokens || 0)
+    );
+    item.estimatedCostUsd += Math.max(0, log.estimatedCostUsd || 0);
+    item.lastUsedAt = Math.max(item.lastUsedAt || 0, log.createdAt || 0);
+    grouped.set(key, item);
+  }
+  return Array.from(grouped.values())
+    .filter((item) => item.totalTokens > 0 || item.estimatedCostUsd > 0)
+    .sort(
+      (left, right) =>
+        right.totalTokens - left.totalTokens ||
+        right.estimatedCostUsd - left.estimatedCostUsd
+    )
+    .slice(0, 12);
 }

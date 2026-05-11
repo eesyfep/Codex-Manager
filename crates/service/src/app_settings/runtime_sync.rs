@@ -4,14 +4,19 @@ use crate::usage_refresh;
 use super::{
     apply_env_overrides_to_process, list_app_settings_map, normalize_optional_text,
     persisted_env_overrides_missing_process_env, reload_runtime_after_env_override_apply,
-    set_service_bind_mode, BackgroundTasksInput, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
-    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
-    APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY, APP_SETTING_GATEWAY_ORIGINATOR_KEY,
-    APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
-    APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
-    APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
+    set_service_bind_mode, BackgroundTasksInput, APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
+    APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
+    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY,
+    APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY, APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
+    APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY, APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_TOTAL_TIMEOUT_MS_KEY, APP_SETTING_GATEWAY_USER_AGENT_VERSION_KEY,
-    SERVICE_BIND_MODE_SETTING_KEY,
+    APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY, APP_SETTING_GATEWAY_WOOL_ENABLED_KEY,
+    APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY,
+    APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY,
+    APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY,
+    APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY, SERVICE_BIND_MODE_SETTING_KEY,
 };
 
 /// 函数 `process_env_has_value`
@@ -102,6 +107,60 @@ pub fn sync_runtime_settings_from_storage() {
                 gateway::set_account_max_inflight_limit(limit);
             } else {
                 log::warn!("parse persisted account max inflight failed: {raw}");
+            }
+        }
+    }
+    if let Some(raw) = settings.get(APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY) {
+        if let Ok(seconds) = raw.trim().parse::<i64>() {
+            gateway::set_account_default_cooldown_secs(seconds);
+        } else {
+            log::warn!("parse persisted account cooldown seconds failed: {raw}");
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_ENABLED") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_ENABLED_KEY) {
+            gateway::set_wool_enabled(super::parse_bool_with_default(raw, true));
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_MAX_INFLIGHT_PER_API") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY) {
+            if let Ok(limit) = raw.trim().parse::<usize>() {
+                gateway::set_wool_max_inflight_per_api(limit);
+            }
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_POOL_MAX_INFLIGHT") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY) {
+            if let Ok(limit) = raw.trim().parse::<usize>() {
+                gateway::set_wool_pool_max_inflight(limit);
+            }
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_PREFLIGHT_WORKERS") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY) {
+            if let Ok(workers) = raw.trim().parse::<usize>() {
+                gateway::set_wool_preflight_workers(workers);
+            }
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_COOLDOWN_SECONDS") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY) {
+            if let Ok(seconds) = raw.trim().parse::<u64>() {
+                gateway::set_wool_cooldown_seconds(seconds);
+            }
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_PREFLIGHT_TTL_SECONDS") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY) {
+            if let Ok(seconds) = raw.trim().parse::<u64>() {
+                gateway::set_wool_preflight_ttl_seconds(seconds);
+            }
+        }
+    }
+    if !process_env_has_value("CODEXMANAGER_WOOL_FAILURE_THRESHOLD") {
+        if let Some(raw) = settings.get(APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY) {
+            if let Ok(threshold) = raw.trim().parse::<usize>() {
+                gateway::set_wool_failure_threshold(threshold);
             }
         }
     }

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Codex Router Desktop Dev",
+  "version": "0.2.6",
+  "identifier": "com.codexmanager.desktop.router-dev",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "node ./src-tauri/scripts/before-build.mjs build:desktop",
+    "devUrl": "http://127.0.0.1:3005",
+    "frontendDist": "../out"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Codex Router Desktop Dev",
+        "width": 1180,
+        "height": 760,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ]
+  },
+  "plugins": {}
+}

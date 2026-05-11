@@ -45,6 +45,10 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import {
+  SearchableModelPicker,
+  type SearchableModelOption,
+} from "@/components/searchable-model-picker";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -90,7 +94,6 @@ import {
   THEMES,
   WORKER_PRESET_KEYS,
   WORKER_PRESETS,
-  asRecord,
   buildReleaseUrl,
   type CheckUpdateRequest,
   compareEnvOverrideItems,
@@ -143,6 +146,13 @@ export default function SettingsPage() {
     useState<string | null>(null);
   const [modelForwardRulesDraft, setModelForwardRulesDraft] =
     useState<string | null>(null);
+  const [probeFallbackModelPrimaryDraft, setProbeFallbackModelPrimaryDraft] =
+    useState<string | null>(null);
+  const [probeFallbackModelSecondaryDraft, setProbeFallbackModelSecondaryDraft] =
+    useState<string | null>(null);
+  const [routeStrategyDraft, setRouteStrategyDraft] = useState<string | null>(
+    null,
+  );
   const [lastUpdateCheck, setLastUpdateCheck] =
     useState<UpdateCheckResult | null>(null);
   const [updateDialogCheck, setUpdateDialogCheck] =
@@ -226,8 +236,29 @@ export default function SettingsPage() {
     enabled: isSnapshotQueryEnabled && isPageActive,
   });
   const snapshot = fetchedSnapshot ?? storedSettings;
+  const freeAccountModelOptions: SearchableModelOption[] = (
+    snapshot?.freeAccountMaxModelOptions?.length
+      ? snapshot.freeAccountMaxModelOptions
+      : DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS
+  ).map((model) => ({
+    value: model,
+    label: t(formatFreeAccountModelLabel(model)),
+    keywords: [model, formatFreeAccountModelLabel(model)],
+  }));
   const modelForwardRulesInput =
     modelForwardRulesDraft ?? (snapshot?.modelForwardRules || "");
+  const routeStrategyInput =
+    routeStrategyDraft ?? (snapshot?.routeStrategy || "ordered");
+  const probeFallbackModelsInput =
+    (snapshot?.modelRouterProbeFallbackModels || "gpt-5.4,gpt-5.5");
+  const probeFallbackModels = probeFallbackModelsInput
+    .split(/[\n\r,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const probeFallbackModelPrimaryInput =
+    probeFallbackModelPrimaryDraft ?? probeFallbackModels[0] ?? "gpt-5.4";
+  const probeFallbackModelSecondaryInput =
+    probeFallbackModelSecondaryDraft ?? probeFallbackModels[1] ?? "gpt-5.5";
   usePageTransitionReady(
     "/settings/",
     !canAccessManagementRpc || Boolean(snapshot) || isSnapshotError,
@@ -982,6 +1013,41 @@ export default function SettingsPage() {
       .catch(() => undefined);
   };
 
+  const saveWoolNumberField = (
+    key:
+      | "woolMaxInflightPerApi"
+      | "woolPoolMaxInflight"
+      | "woolPreflightWorkers"
+      | "woolCooldownSeconds"
+      | "woolPreflightTtlSeconds"
+      | "woolFailureThreshold"
+      | "accountCooldownSeconds",
+    minimum = 1,
+  ) => {
+    if (!snapshot) return;
+    const sourceValue = backgroundTaskDraft[key] ?? stringifyNumber(snapshot[key]);
+    const nextValue = parseIntegerInput(sourceValue, minimum);
+    if (nextValue == null) {
+      toast.error(t("请输入合法的数值"));
+      setBackgroundTaskDraft((current) => {
+        const nextDraft = { ...current };
+        delete nextDraft[key];
+        return nextDraft;
+      });
+      return;
+    }
+    void updateSettings
+      .mutateAsync({ [key]: nextValue } as Partial<AppSettings>)
+      .then(() => {
+        setBackgroundTaskDraft((current) => {
+          const nextDraft = { ...current };
+          delete nextDraft[key];
+          return nextDraft;
+        });
+      })
+      .catch(() => undefined);
+  };
+
   /**
    * 函数 `handleSaveEnv`
    *
@@ -1093,7 +1159,7 @@ export default function SettingsPage() {
         }}
         className="w-full"
       >
-        <TabsList className="glass-card mb-6 flex h-11 w-full justify-start overflow-x-auto rounded-xl border-none p-1 no-scrollbar lg:w-fit">
+        <TabsList className="glass-card mb-6 flex h-11 w-full justify-start overflow-x-auto rounded-xl border border-border p-1 no-scrollbar lg:w-fit">
           <TabsTrigger value="general" className="gap-2 px-5 shrink-0">
             <SettingsIcon className="h-4 w-4" /> {t("通用")}
           </TabsTrigger>
@@ -1112,7 +1178,7 @@ export default function SettingsPage() {
         </TabsList>
 
         <TabsContent value="general" className="space-y-6">
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <div className="flex items-center gap-2">
                 <AppWindow className="h-4 w-4 text-primary" />
@@ -1121,7 +1187,7 @@ export default function SettingsPage() {
               <CardDescription>{t("控制应用启动和窗口行为")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="flex flex-col gap-3 rounded-2xl border border-border/50 bg-background/45 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-col gap-3 rounded-2xl border border-border bg-background/45 p-4 md:flex-row md:items-center md:justify-between">
                 <div className="space-y-1">
                   <Label>{updateActionLabel}</Label>
                   <p className="text-xs text-muted-foreground">
@@ -1205,7 +1271,7 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Globe className="h-4 w-4 text-primary" />
@@ -1252,7 +1318,7 @@ export default function SettingsPage() {
                 </Select>
               </div>
 
-              <div className="rounded-2xl border border-border/50 bg-background/45 p-4 text-sm">
+              <div className="rounded-2xl border border-border bg-background/45 p-4 text-sm">
                 <div className="flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">{t("当前访问地址")}</span>
                   <code className="text-xs text-primary">
@@ -1282,7 +1348,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="appearance" className="space-y-6">
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Palette className="h-4 w-4 text-primary" />
@@ -1305,7 +1371,7 @@ export default function SettingsPage() {
                         "group relative rounded-2xl border p-4 text-left transition-all duration-300 hover:-translate-y-0.5",
                         isActive
                           ? "border-primary bg-primary/10 shadow-lg ring-1 ring-primary"
-                          : "border-border/60 bg-background/50 hover:bg-accent/30",
+                          : "border-border bg-background/50 hover:bg-accent/30",
                       )}
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -1358,7 +1424,7 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <div className="flex items-center gap-2">
                 <Palette className="h-4 w-4 text-primary" />
@@ -1382,7 +1448,7 @@ export default function SettingsPage() {
                     )}
                   >
                     <div
-                      className="h-10 w-10 rounded-full border-2 border-white/20 shadow-md"
+                      className="h-10 w-10 rounded-full border border-white/20 shadow-md"
                       style={{ backgroundColor: item.color }}
                     />
                     <span
@@ -1408,7 +1474,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="gateway" className="space-y-4">
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <CardTitle className="text-base">{t("网关策略")}</CardTitle>
               <CardDescription>{t("配置账号选路和请求头处理方式")}</CardDescription>
@@ -1417,10 +1483,18 @@ export default function SettingsPage() {
               <div className="grid gap-2">
                 <Label>{t("账号选路策略")}</Label>
                 <Select
-                  value={snapshot.routeStrategy || "ordered"}
-                  onValueChange={(value) =>
-                    updateSettings.mutate({ routeStrategy: value || "ordered" })
-                  }
+                  value={routeStrategyInput}
+                  onValueChange={(value) => {
+                    const nextValue = value || "ordered";
+                    setRouteStrategyDraft(nextValue);
+                    void updateSettings
+                      .mutateAsync({ routeStrategy: nextValue, _silent: true })
+                      .then(() => {
+                        setRouteStrategyDraft(null);
+                        toast.success(t("选路策略已更新"));
+                      })
+                      .catch(() => undefined);
+                  }}
                 >
                   <SelectTrigger className="w-full md:w-[300px]">
                     <SelectValue placeholder={t("选择策略")}>
@@ -1440,39 +1514,28 @@ export default function SettingsPage() {
                 </Select>
                 <p className="text-[10px] text-muted-foreground">
                   {t(
-                    "顺序优先：按账号候选顺序优先尝试，默认只会在头部小窗口内按健康度做轻微换头；均衡轮询：按“平台密钥 + 模型”维度严格轮询可用账号，默认不做健康度换头。",
+                    "顺序优先：账号与聚合 API 都按候选顺序尝试；均衡轮询：账号按“平台密钥 + 模型”轮询，聚合 API 按“平台密钥 + 模型 + API 列表”轮换，同一 Base URL 下的多个 API 也会参与轮换。",
                   )}
                 </p>
               </div>
 
               <div className="grid gap-2">
                 <Label>{t("Free 账号使用模型")}</Label>
-                <Select
-                  value={snapshot.freeAccountMaxModel || "auto"}
-                  onValueChange={(value) =>
-                    updateSettings.mutate({
-                      freeAccountMaxModel: value || "auto",
-                    })
-                  }
-                >
-                  <SelectTrigger className="w-full md:w-[300px]">
-                    <SelectValue placeholder={t("选择 free 账号使用模型")}>
-                      {(value) =>
-                        t(formatFreeAccountModelLabel(String(value || "")))
-                      }
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(snapshot.freeAccountMaxModelOptions?.length
-                      ? snapshot.freeAccountMaxModelOptions
-                      : DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS
-                    ).map((model) => (
-                      <SelectItem key={model} value={model}>
-                        {t(formatFreeAccountModelLabel(model))}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="w-full md:w-[300px]">
+                  <SearchableModelPicker
+                    value={snapshot.freeAccountMaxModel || "auto"}
+                    onValueChange={(value) =>
+                      updateSettings.mutate({
+                        freeAccountMaxModel: value || "auto",
+                      })
+                    }
+                    options={freeAccountModelOptions}
+                    placeholder={t("选择 free 账号使用模型")}
+                    searchPlaceholder={t("搜索模型 slug 或显示名称")}
+                    emptyLabel={t("没有匹配的模型")}
+                    triggerClassName="h-9"
+                  />
+                </div>
                 <p className="text-[10px] text-muted-foreground">
                   {t(
                     "设为“跟随请求”时，不会额外改写 free / 7天单窗口账号的模型；只有你选了具体模型后，命中这些账号时才会统一改写为该模型。",
@@ -1512,6 +1575,74 @@ export default function SettingsPage() {
                   {t("通配。平台 Key 没有强绑模型时，会先按这里把请求模型改写，再进入账号路由。")}
                 </p>
               </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label>{t("测速兜底模型 1")}</Label>
+                  <Input
+                    className="h-9 max-w-md font-mono"
+                    value={probeFallbackModelPrimaryInput}
+                    onChange={(event) =>
+                      setProbeFallbackModelPrimaryDraft(event.target.value)
+                    }
+                    onBlur={() => {
+                      if (probeFallbackModelPrimaryDraft == null) return;
+                      const next = [
+                        probeFallbackModelPrimaryInput,
+                        probeFallbackModelSecondaryInput,
+                      ]
+                        .map((item) => item.trim())
+                        .filter(Boolean)
+                        .join(",");
+                      if (next === (snapshot.modelRouterProbeFallbackModels || "gpt-5.4,gpt-5.5").trim()) {
+                        setProbeFallbackModelPrimaryDraft(null);
+                        return;
+                      }
+                      void updateSettings
+                        .mutateAsync({
+                          modelRouterProbeFallbackModels: next,
+                        })
+                        .then(() => setProbeFallbackModelPrimaryDraft(null))
+                        .catch(() => undefined);
+                    }}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>{t("测速兜底模型 2")}</Label>
+                  <Input
+                    className="h-9 max-w-md font-mono"
+                    value={probeFallbackModelSecondaryInput}
+                    onChange={(event) =>
+                      setProbeFallbackModelSecondaryDraft(event.target.value)
+                    }
+                    onBlur={() => {
+                      if (probeFallbackModelSecondaryDraft == null) return;
+                      const next = [
+                        probeFallbackModelPrimaryInput,
+                        probeFallbackModelSecondaryInput,
+                      ]
+                        .map((item) => item.trim())
+                        .filter(Boolean)
+                        .join(",");
+                      if (next === (snapshot.modelRouterProbeFallbackModels || "gpt-5.4,gpt-5.5").trim()) {
+                        setProbeFallbackModelSecondaryDraft(null);
+                        return;
+                      }
+                      void updateSettings
+                        .mutateAsync({
+                          modelRouterProbeFallbackModels: next,
+                        })
+                        .then(() => setProbeFallbackModelSecondaryDraft(null))
+                        .catch(() => undefined);
+                    }}
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                {t(
+                  "仅在 /v1/models、已有绑定、历史使用和探测候选都为空时用于真实请求测速；支持随时改成别的模型名，保存后立即生效。"
+                )}
+              </p>
 
               <div className="grid gap-2 border-t pt-6">
                 <Label>{t("Originator")}</Label>
@@ -1730,7 +1861,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="tasks" className="space-y-4">
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <CardTitle className="text-base">{t("后台任务线程")}</CardTitle>
               <CardDescription>{t("管理自动轮询和保活任务；")}</CardDescription>
@@ -1806,7 +1937,7 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          <Card className="glass-card border-none shadow-md">
+          <Card className="glass-card border border-border shadow-md">
             <CardHeader>
               <div className="flex items-center gap-2">
                 <SettingsIcon className="h-4 w-4 text-primary" />
@@ -1819,7 +1950,7 @@ export default function SettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+              <div className="rounded-xl border border-border bg-muted/20 p-4">
                 <div className="grid gap-4 lg:grid-cols-[minmax(280px,380px)_minmax(0,1fr)] lg:items-end">
                   <div className="space-y-2">
                     <Label>{t("运行模式")}</Label>
@@ -1883,7 +2014,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-col gap-3 border-t border-border/50 pt-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 lg:flex-row lg:items-center lg:justify-between">
                   <p className="text-xs leading-6 text-muted-foreground">
                     {activeWorkerSummary}
                   </p>
@@ -1905,7 +2036,7 @@ export default function SettingsPage() {
             open={workerAdvancedDialogOpen}
             onOpenChange={setWorkerAdvancedDialogOpen}
           >
-            <DialogContent className="glass-card border-none sm:max-w-2xl">
+            <DialogContent className="glass-card max-h-[85vh] overflow-y-auto border border-border sm:max-w-4xl">
               <DialogHeader>
                 <DialogTitle>{t("高级参数")}</DialogTitle>
                 <DialogDescription>
@@ -1990,6 +2121,117 @@ export default function SettingsPage() {
                   </div>
                 ))}
               </div>
+              <div className="mt-5 grid gap-4 border-t border-border pt-4">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+                <div className="flex flex-col gap-3 rounded-lg border border-border bg-muted/20 p-3 sm:flex-row sm:items-start sm:justify-between xl:flex-col">
+                  <div className="space-y-1">
+                    <Label className="text-sm">羊毛池并发</Label>
+                    <p className="text-[11px] leading-5 text-muted-foreground">
+                      羊毛并发只限制羊毛 API，不限制主用 API；羊毛池满载时不会排队等待，会立即回退主用 API。
+                    </p>
+                    <p className="text-[11px] leading-5 text-muted-foreground">
+                      调大并发会更快消耗免费额度，也更容易触发限流；调小冷却时间会更快重试失效 key，但会增加失败请求噪音。
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {snapshot.woolEnabled ? "已启用" : "已关闭"}
+                    </span>
+                    <Switch
+                      checked={snapshot.woolEnabled}
+                      onCheckedChange={(checked) =>
+                        updateSettings.mutate({ woolEnabled: Boolean(checked) })
+                      }
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {[
+                    {
+                      label: "单羊毛 API 并发",
+                      helper: "默认 2，避免一个短时效 key 承担全部请求。",
+                      key: "woolMaxInflightPerApi",
+                    },
+                    {
+                      label: "羊毛池总并发",
+                      helper: "默认 6，羊毛满载时请求直接回退主用池。",
+                      key: "woolPoolMaxInflight",
+                    },
+                    {
+                      label: "羊毛预检线程",
+                      helper: "默认 3，低于后台巡检并发，避免预检抖动。",
+                      key: "woolPreflightWorkers",
+                    },
+                  {
+                    label: "羊毛冷却时间",
+                    helper: "默认 600 秒，失败后暂时跳过该 key。",
+                    key: "woolCooldownSeconds",
+                  },
+                  {
+                    label: "主号默认冷却时间",
+                    helper: "默认 20 秒，主账号网络/普通失败后暂时跳过，避免反复选中不可用上游。",
+                    key: "accountCooldownSeconds",
+                  },
+                  {
+                    label: "预检有效期",
+                    helper: "默认 300 秒，有效期内不重复预检。",
+                    key: "woolPreflightTtlSeconds",
+                    },
+                    {
+                      label: "失败进入冷却阈值",
+                      helper: "默认 1，免费 API 一次失败就进入冷却。",
+                      key: "woolFailureThreshold",
+                    },
+                  ].map((setting) => (
+                    <div key={setting.key} className="grid gap-1.5">
+                      <Label className="text-xs">{setting.label}</Label>
+                      <p className="text-[11px] leading-5 text-muted-foreground">
+                        {setting.helper}
+                      </p>
+                      <Input
+                        type="number"
+                        min={1}
+                        className="h-9"
+                        value={
+                          backgroundTaskDraft[setting.key] ??
+                          stringifyNumber(
+                            snapshot[
+                              setting.key as
+                                | "woolMaxInflightPerApi"
+                                | "woolPoolMaxInflight"
+                                | "woolPreflightWorkers"
+                                | "woolCooldownSeconds"
+                                | "woolPreflightTtlSeconds"
+                                | "woolFailureThreshold"
+                                | "accountCooldownSeconds"
+                            ] as number,
+                          )
+                        }
+                        onChange={(event) =>
+                          setBackgroundTaskDraft((current) => ({
+                            ...current,
+                            [setting.key]: event.target.value,
+                          }))
+                        }
+                        onBlur={() =>
+                          saveWoolNumberField(
+                            setting.key as
+                              | "woolMaxInflightPerApi"
+                              | "woolPoolMaxInflight"
+                              | "woolPreflightWorkers"
+                              | "woolCooldownSeconds"
+                              | "woolPreflightTtlSeconds"
+                              | "woolFailureThreshold"
+                              | "accountCooldownSeconds",
+                            1,
+                          )
+                        }
+                      />
+                    </div>
+                  ))}
+                </div>
+                </div>
+              </div>
               <DialogFooter className="gap-2 sm:gap-2">
                 <Button
                   type="button"
@@ -2004,7 +2246,7 @@ export default function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="env" className="space-y-4">
-          <div className="flex flex-col gap-3 rounded-2xl border border-border/50 bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 rounded-2xl border border-border bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="space-y-1">
               <h3 className="text-sm font-semibold">{t("环境变量配置")}</h3>
               <p className="text-sm leading-6 text-muted-foreground">
@@ -2026,7 +2268,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="grid gap-6 md:grid-cols-[300px_1fr]">
-            <Card className="glass-card flex h-[500px] flex-col border-none shadow-md">
+            <Card className="glass-card flex h-[500px] flex-col border border-border shadow-md">
               <CardHeader className="pb-3">
                 <div className="relative">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -2082,7 +2324,7 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
 
-            <Card className="glass-card min-h-[500px] border-none shadow-md">
+            <Card className="glass-card min-h-[500px] border border-border shadow-md">
               {selectedEnvKey ? (
                 <>
                   <CardHeader>
@@ -2125,7 +2367,7 @@ export default function SettingsPage() {
                         {t(selectedEnvSafetyNote)}
                       </div>
                     ) : (
-                      <div className="rounded-lg border border-border/50 bg-muted/20 p-4 text-sm leading-relaxed text-muted-foreground">
+                      <div className="rounded-lg border border-border bg-muted/20 p-4 text-sm leading-relaxed text-muted-foreground">
                         {t(selectedEnvSafetyNote)}
                       </div>
                     )}
@@ -2200,7 +2442,7 @@ export default function SettingsPage() {
       >
         <DialogContent
           showCloseButton={false}
-          className="glass-card border-none p-6 sm:max-w-[480px]"
+          className="glass-card border border-border p-6 sm:max-w-[480px]"
         >
           <DialogHeader>
             <DialogTitle>
@@ -2220,7 +2462,7 @@ export default function SettingsPage() {
           </DialogHeader>
 
           <div className="space-y-3 text-sm">
-            <div className="rounded-2xl border border-border/50 bg-background/45 p-4">
+            <div className="rounded-2xl border border-border bg-background/45 p-4">
               <div className="flex items-center justify-between gap-4">
                 <span className="text-muted-foreground">{t("当前版本")}</span>
                 <span className="font-medium">
@@ -2255,11 +2497,11 @@ export default function SettingsPage() {
             </div>
 
             {preparedUpdate ? null : updateDialogCheck?.reason ? (
-              <div className="rounded-2xl border border-border/50 bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
+              <div className="rounded-2xl border border-border bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
                 {updateDialogCheck.reason}
               </div>
             ) : (
-              <div className="rounded-2xl border border-border/50 bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
+              <div className="rounded-2xl border border-border bg-muted/40 p-4 text-xs leading-5 text-muted-foreground">
                 {t("建议先下载更新包，下载完成后再执行安装或重启更新。")}
               </div>
             )}

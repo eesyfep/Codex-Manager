@@ -1,6 +1,9 @@
 use rusqlite::Result;
 
-use super::{ApiKeyTokenUsageSummary, RequestLogTodaySummary, RequestTokenStat, Storage};
+use super::{
+    ApiKeyTokenUsageSummary, DashboardDailyTokenUsageBucket, DashboardTokenUsageSummary,
+    RequestLogTodaySummary, RequestTokenStat, Storage,
+};
 
 impl Storage {
     /// 函数 `insert_request_token_stat`
@@ -130,6 +133,229 @@ impl Storage {
                 total_tokens: row.get(1)?,
                 estimated_cost_usd: row.get(2)?,
             });
+        }
+        Ok(items)
+    }
+
+    pub fn summarize_dashboard_token_usage(
+        &self,
+        start_ts: Option<i64>,
+        end_ts: Option<i64>,
+        limit: i64,
+    ) -> Result<Vec<DashboardTokenUsageSummary>> {
+        let limit = limit.clamp(1, 100);
+        let mut filters = Vec::new();
+        if start_ts.is_some() {
+            filters.push("t.created_at >= ?".to_string());
+        }
+        if end_ts.is_some() {
+            filters.push("t.created_at < ?".to_string());
+        }
+        let where_sql = if filters.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", filters.join(" AND "))
+        };
+        let sql = format!(
+            "SELECT
+                t.key_id,
+                k.name,
+                t.account_id,
+                a.label,
+                COALESCE(k.aggregate_api_id, r.initial_aggregate_api_id),
+                COALESCE(r.aggregate_api_supplier_name, aa.supplier_name),
+                COALESCE(r.aggregate_api_url, aa.url),
+                t.model,
+                COUNT(*) AS request_count,
+                IFNULL(SUM(t.input_tokens), 0) AS input_tokens,
+                IFNULL(SUM(t.cached_input_tokens), 0) AS cached_input_tokens,
+                IFNULL(SUM(t.output_tokens), 0) AS output_tokens,
+                IFNULL(SUM(t.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+                IFNULL(
+                    SUM(
+                        CASE
+                            WHEN t.total_tokens IS NOT NULL THEN
+                                CASE WHEN t.total_tokens > 0 THEN t.total_tokens ELSE 0 END
+                            ELSE
+                                CASE
+                                    WHEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0) > 0
+                                        THEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0)
+                                    ELSE 0
+                                END
+                        END
+                    ),
+                    0
+                ) AS total_tokens,
+                IFNULL(SUM(t.estimated_cost_usd), 0.0) AS estimated_cost_usd,
+                MAX(t.created_at) AS last_used_at
+             FROM request_token_stats t
+             LEFT JOIN request_logs r ON r.id = t.request_log_id
+             LEFT JOIN api_keys k ON k.id = t.key_id
+             LEFT JOIN aggregate_apis aa ON aa.id = COALESCE(k.aggregate_api_id, r.initial_aggregate_api_id)
+             LEFT JOIN accounts a ON a.id = t.account_id
+             {where_sql}
+             GROUP BY
+                COALESCE(t.key_id, ''),
+                COALESCE(t.account_id, ''),
+                COALESCE(k.aggregate_api_id, r.initial_aggregate_api_id, ''),
+                COALESCE(r.aggregate_api_url, aa.url, ''),
+                COALESCE(t.model, '')
+             ORDER BY total_tokens DESC, estimated_cost_usd DESC, last_used_at DESC
+             LIMIT ?"
+        );
+        let mut params = Vec::new();
+        if let Some(value) = start_ts {
+            params.push(rusqlite::types::Value::Integer(value));
+        }
+        if let Some(value) = end_ts {
+            params.push(rusqlite::types::Value::Integer(value));
+        }
+        params.push(rusqlite::types::Value::Integer(limit));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(DashboardTokenUsageSummary {
+                key_id: row.get(0)?,
+                key_name: row.get(1)?,
+                account_id: row.get(2)?,
+                account_label: row.get(3)?,
+                aggregate_api_id: row.get(4)?,
+                aggregate_api_supplier_name: row.get(5)?,
+                aggregate_api_url: row.get(6)?,
+                model: row.get(7)?,
+                request_count: row.get(8)?,
+                input_tokens: row.get(9)?,
+                cached_input_tokens: row.get(10)?,
+                output_tokens: row.get(11)?,
+                reasoning_output_tokens: row.get(12)?,
+                total_tokens: row.get(13)?,
+                estimated_cost_usd: row.get(14)?,
+                last_used_at: row.get(15)?,
+            })
+        })?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
+        }
+        Ok(items)
+    }
+
+    pub fn summarize_dashboard_daily_token_usage(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+        limit_per_day: i64,
+    ) -> Result<Vec<DashboardDailyTokenUsageBucket>> {
+        let limit_per_day = limit_per_day.clamp(1, 64);
+        let mut stmt = self.conn.prepare(
+            "WITH grouped AS (
+                SELECT
+                    ((t.created_at + CAST(strftime('%s', 'now', 'localtime') AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER)) / 86400) * 86400
+                        - (CAST(strftime('%s', 'now', 'localtime') AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER)) AS day_start_ts,
+                    COALESCE(
+                        NULLIF(TRIM(COALESCE(r.aggregate_api_url, aa.url)), ''),
+                        NULLIF(TRIM(t.model), ''),
+                        'unknown'
+                    ) AS source_key,
+                    COALESCE(
+                        NULLIF(TRIM(COALESCE(r.aggregate_api_supplier_name, aa.supplier_name)), ''),
+                        NULLIF(TRIM(COALESCE(r.aggregate_api_url, aa.url)), ''),
+                        NULLIF(TRIM(t.model), ''),
+                        '未知模型'
+                    ) AS source_label,
+                    NULLIF(TRIM(t.model), '') AS model,
+                    COUNT(*) AS request_count,
+                    IFNULL(SUM(t.input_tokens), 0) AS input_tokens,
+                    IFNULL(SUM(t.cached_input_tokens), 0) AS cached_input_tokens,
+                    IFNULL(
+                        SUM(
+                            CASE
+                                WHEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) > 0
+                                    THEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0)
+                                ELSE 0
+                            END
+                        ),
+                        0
+                    ) AS billable_input_tokens,
+                    IFNULL(SUM(t.output_tokens), 0) AS output_tokens,
+                    IFNULL(SUM(t.reasoning_output_tokens), 0) AS reasoning_output_tokens,
+                    IFNULL(
+                        SUM(
+                            CASE
+                                WHEN t.total_tokens IS NOT NULL THEN
+                                    CASE WHEN t.total_tokens > 0 THEN t.total_tokens ELSE 0 END
+                                ELSE
+                                    CASE
+                                        WHEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0) > 0
+                                            THEN IFNULL(t.input_tokens, 0) - IFNULL(t.cached_input_tokens, 0) + IFNULL(t.output_tokens, 0)
+                                        ELSE 0
+                                    END
+                            END
+                        ),
+                        0
+                    ) AS total_tokens,
+                    IFNULL(SUM(t.estimated_cost_usd), 0.0) AS estimated_cost_usd
+                 FROM request_token_stats t
+                 LEFT JOIN request_logs r ON r.id = t.request_log_id
+                 LEFT JOIN api_keys k ON k.id = t.key_id
+                 LEFT JOIN aggregate_apis aa ON aa.id = COALESCE(k.aggregate_api_id, r.initial_aggregate_api_id)
+                 WHERE t.created_at >= ?1 AND t.created_at < ?2
+                 GROUP BY
+                    day_start_ts,
+                    COALESCE(
+                        NULLIF(TRIM(COALESCE(r.aggregate_api_url, aa.url)), ''),
+                        NULLIF(TRIM(t.model), ''),
+                        'unknown'
+                    ),
+                    NULLIF(TRIM(t.model), '')
+             ),
+             ranked AS (
+                 SELECT
+                    grouped.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY day_start_ts
+                        ORDER BY total_tokens DESC, estimated_cost_usd DESC, request_count DESC
+                    ) AS source_rank
+                 FROM grouped
+             )
+             SELECT
+                day_start_ts,
+                CASE WHEN source_rank <= ?3 THEN source_key ELSE '__other__' END AS bucket_key,
+                CASE WHEN source_rank <= ?3 THEN source_label ELSE '其他来源' END AS bucket_label,
+                CASE WHEN source_rank <= ?3 THEN model ELSE NULL END AS bucket_model,
+                SUM(request_count) AS request_count,
+                SUM(input_tokens) AS input_tokens,
+                SUM(cached_input_tokens) AS cached_input_tokens,
+                SUM(billable_input_tokens) AS billable_input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(reasoning_output_tokens) AS reasoning_output_tokens,
+                SUM(total_tokens) AS total_tokens,
+                SUM(estimated_cost_usd) AS estimated_cost_usd
+             FROM ranked
+             GROUP BY day_start_ts, bucket_key, bucket_label, bucket_model
+             ORDER BY day_start_ts ASC, total_tokens DESC",
+        )?;
+        let rows = stmt.query_map((start_ts, end_ts, limit_per_day), |row| {
+            Ok(DashboardDailyTokenUsageBucket {
+                day_start_ts: row.get(0)?,
+                source_key: row.get(1)?,
+                source_label: row.get(2)?,
+                model: row.get(3)?,
+                request_count: row.get(4)?,
+                input_tokens: row.get(5)?,
+                cached_input_tokens: row.get(6)?,
+                billable_input_tokens: row.get(7)?,
+                output_tokens: row.get(8)?,
+                reasoning_output_tokens: row.get(9)?,
+                total_tokens: row.get(10)?,
+                estimated_cost_usd: row.get(11)?,
+            })
+        })?;
+
+        let mut items = Vec::new();
+        for row in rows {
+            items.push(row?);
         }
         Ok(items)
     }

@@ -2,6 +2,7 @@ export * from "@/types/account";
 export * from "@/types/api-key";
 export * from "@/types/auth";
 export * from "@/types/model";
+export * from "@/types/model-router";
 export * from "@/types/plugin";
 export * from "@/types/request-log";
 export * from "@/types/runtime";

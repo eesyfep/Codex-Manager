@@ -763,7 +763,26 @@ pub(crate) fn log_client_service_tier(
 /// # 返回
 /// 无
 pub(crate) fn log_request_body_preview(trace_id: &str, body: &[u8]) {
-    let _ = (trace_id, body, super::trace_body_preview_max_bytes());
+    let preview_max = super::trace_body_preview_max_bytes();
+    if preview_max == 0 {
+        return;
+    }
+    let preview_len = body.len().min(preview_max);
+    let preview = String::from_utf8_lossy(&body[..preview_len]);
+    let truncated = if body.len() > preview_len {
+        "true"
+    } else {
+        "false"
+    };
+    let line = format!(
+        "ts={} event=REQUEST_BODY_PREVIEW trace_id={} body_len={} preview_truncated={} body_preview={}",
+        current_trace_ts(),
+        sanitize_text(trace_id),
+        body.len(),
+        truncated,
+        sanitize_text(preview.as_ref()),
+    );
+    buffer_trace_line(trace_id, line);
 }
 
 pub(crate) fn log_gemini_request_diagnostics(
@@ -1190,6 +1209,11 @@ pub(crate) struct FailedRequestLog<'a> {
     pub reasoning_effort: Option<&'a str>,
     pub service_tier: Option<&'a str>,
     pub upstream_url: Option<&'a str>,
+    pub routed_from: Option<&'a str>,
+    pub initial_aggregate_api_id: Option<&'a str>,
+    pub attempted_aggregate_api_ids_json: Option<&'a str>,
+    pub aggregate_api_supplier_name: Option<&'a str>,
+    pub aggregate_api_url: Option<&'a str>,
     pub status_code: Option<u16>,
     pub error: Option<&'a str>,
     pub duration_ms: Option<i64>,
@@ -1210,6 +1234,11 @@ pub(crate) fn log_failed_request(params: FailedRequestLog<'_>) {
         reasoning_effort,
         service_tier,
         upstream_url,
+        routed_from,
+        initial_aggregate_api_id,
+        attempted_aggregate_api_ids_json,
+        aggregate_api_supplier_name,
+        aggregate_api_url,
         status_code,
         error,
         duration_ms,
@@ -1222,7 +1251,7 @@ pub(crate) fn log_failed_request(params: FailedRequestLog<'_>) {
     }
     let code = crate::error_codes::code_or_dash(error);
     let line = format!(
-        "ts={ts} event=FAILED_REQUEST trace_id={} key_id={} account_id={} method={} request_path={} original_path={} adapted_path={} request_type={} model={} reasoning={} service_tier={} upstream_url={} status={} elapsed_ms={} code={} error={}",
+        "ts={ts} event=FAILED_REQUEST trace_id={} key_id={} account_id={} method={} request_path={} original_path={} adapted_path={} request_type={} model={} reasoning={} service_tier={} upstream_url={} routed_from={} initial_aggregate_api_id={} attempted_aggregate_api_ids={} aggregate_api_supplier_name={} aggregate_api_url={} status={} elapsed_ms={} code={} error={}",
         sanitize_text(trace_id.unwrap_or("-")),
         sanitize_text(key_id.unwrap_or("-")),
         sanitize_text(account_id.unwrap_or("-")),
@@ -1235,6 +1264,11 @@ pub(crate) fn log_failed_request(params: FailedRequestLog<'_>) {
         sanitize_text(reasoning_effort.unwrap_or("-")),
         sanitize_text(service_tier.unwrap_or("-")),
         sanitize_text(upstream_url.unwrap_or("-")),
+        sanitize_text(routed_from.unwrap_or("-")),
+        sanitize_text(initial_aggregate_api_id.unwrap_or("-")),
+        sanitize_text(attempted_aggregate_api_ids_json.unwrap_or("-")),
+        sanitize_text(aggregate_api_supplier_name.unwrap_or("-")),
+        sanitize_text(aggregate_api_url.unwrap_or("-")),
         status_code
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_string()),
@@ -1325,6 +1359,11 @@ mod tests {
             reasoning_effort: Some("high"),
             service_tier: Some("fast"),
             upstream_url: Some("https://chatgpt.com/backend-api/codex/responses"),
+            routed_from: None,
+            initial_aggregate_api_id: None,
+            attempted_aggregate_api_ids_json: None,
+            aggregate_api_supplier_name: None,
+            aggregate_api_url: None,
             status_code: Some(200),
             error: None,
             duration_ms: Some(18),

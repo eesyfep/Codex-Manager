@@ -389,6 +389,44 @@ pub struct ApiKeyUsageStatSummary {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardTokenUsageSummary {
+    pub key_id: Option<String>,
+    pub key_name: Option<String>,
+    pub account_id: Option<String>,
+    pub account_label: Option<String>,
+    pub aggregate_api_id: Option<String>,
+    pub aggregate_api_supplier_name: Option<String>,
+    pub aggregate_api_url: Option<String>,
+    pub model: Option<String>,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub last_used_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardDailyTokenUsageBucket {
+    pub day_start_ts: i64,
+    pub source_key: String,
+    pub source_label: String,
+    pub model: Option<String>,
+    pub billable_input_tokens: i64,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ApiKeyUsageStatListResult {
     pub items: Vec<ApiKeyUsageStatSummary>,
 }
@@ -418,12 +456,39 @@ pub struct AggregateApiSummary {
     pub auth_type: String,
     pub auth_params: Option<serde_json::Value>,
     pub action: Option<String>,
+    pub pool: String,
+    pub wool_max_inflight: Option<i64>,
+    pub wool_cooldown_until: Option<i64>,
+    pub wool_failure_count: i64,
+    pub wool_last_preflight_at: Option<i64>,
+    pub fast: bool,
+    pub compatibility_mode: bool,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_test_at: Option<i64>,
     pub last_test_status: Option<String>,
     pub last_test_error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateApiModelUsageSummary {
+    pub aggregate_api_url: String,
+    pub model: String,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateApiModelUsageListResult {
+    pub items: Vec<AggregateApiModelUsageSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -551,6 +616,196 @@ pub struct AggregateApiTestResult {
     pub message: Option<String>,
     pub tested_at: i64,
     pub latency_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelSummary {
+    pub thread_id: String,
+    pub workspace: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub model_provider: Option<String>,
+    pub effective_model_label: String,
+    pub effective_model_source: String,
+    pub has_model_override: bool,
+    pub parent_thread_id: Option<String>,
+    pub is_subagent: bool,
+    pub agent_nickname: Option<String>,
+    pub agent_role: Option<String>,
+    pub subagent_depth: Option<i64>,
+    pub source: String,
+    pub locked: bool,
+    pub memory_state: String,
+    pub last_seen_at: i64,
+    pub updated_at: i64,
+    pub subagent_model: Option<String>,
+    pub subagent_reasoning_effort: Option<String>,
+    pub subagent_model_source: Option<String>,
+    pub subagent_model_updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceModelDefaultSummary {
+    pub workspace: String,
+    pub default_model: Option<String>,
+    pub default_reasoning_effort: Option<String>,
+    pub inherit_last_session: bool,
+    pub auto_remember: bool,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelListResult {
+    pub items: Vec<SessionModelSummary>,
+    pub workspace_defaults: Vec<WorkspaceModelDefaultSummary>,
+    pub state_db_path: Option<String>,
+    pub state_db_ok: bool,
+    pub state_db_error: Option<String>,
+    pub global_default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelUpdateResult {
+    pub item: SessionModelSummary,
+    pub state_updated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatestSessionModelApplyResult {
+    pub item: SessionModelSummary,
+    pub state_updated: bool,
+    pub matched_workspace: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouteBindingSummary {
+    pub id: String,
+    pub model: String,
+    pub aggregate_api_id: String,
+    pub aggregate_api_name: Option<String>,
+    pub aggregate_api_url: Option<String>,
+    pub enabled: bool,
+    pub priority: i64,
+    pub weight: i64,
+    pub route_strategy: String,
+    pub manual_preferred: bool,
+    pub supports_responses: bool,
+    pub supports_chat_completions: bool,
+    pub requires_adapter: bool,
+    pub last_probe_status: Option<String>,
+    pub last_error: Option<String>,
+    pub last_success_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouteBindingListResult {
+    pub items: Vec<ModelRouteBindingSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouteBindingSaveResult {
+    pub item: ModelRouteBindingSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeCandidateSummary {
+    pub id: String,
+    pub probe_run_id: String,
+    pub aggregate_api_id: String,
+    pub model: String,
+    pub supports_responses: bool,
+    pub supports_chat_completions: bool,
+    pub requires_adapter: bool,
+    pub suggested_route_strategy: String,
+    pub suggested_priority: i64,
+    pub suggested_weight: i64,
+    pub applied: bool,
+    pub error: Option<String>,
+    pub created_at: i64,
+    pub applied_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeRunSummary {
+    pub id: String,
+    pub aggregate_api_id: String,
+    pub aggregate_api_name: Option<String>,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub models_status: Option<String>,
+    pub responses_status: Option<String>,
+    pub chat_completions_status: Option<String>,
+    pub error: Option<String>,
+    pub candidates: Vec<ProbeCandidateSummary>,
+    pub raw_summary: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeRunListResult {
+    pub items: Vec<ProbeRunSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeRunAllResult {
+    pub items: Vec<ProbeRunSummary>,
+    pub attempted: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouteQuickCheckResult {
+    pub aggregate_api_id: String,
+    pub aggregate_api_name: Option<String>,
+    pub model: String,
+    pub ok: bool,
+    pub status_code: Option<i64>,
+    pub protocol: String,
+    pub response_adapter: Option<String>,
+    pub latency_ms: i64,
+    pub error: Option<String>,
+    pub checked_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRouterImportResult {
+    pub source_path: String,
+    pub backup_path: Option<String>,
+    #[serde(default)]
+    pub accounts: usize,
+    #[serde(default)]
+    pub tokens: usize,
+    #[serde(default)]
+    pub usage_snapshots: usize,
+    #[serde(default)]
+    pub request_logs: usize,
+    #[serde(default)]
+    pub request_token_stats: usize,
+    pub aggregate_apis: usize,
+    pub aggregate_api_secrets: usize,
+    pub api_keys: usize,
+    pub api_key_secrets: usize,
+    pub route_bindings: usize,
+    pub workspace_defaults: usize,
+    pub app_settings: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -706,6 +961,7 @@ pub struct RequestLogSummary {
     pub trace_id: Option<String>,
     pub key_id: Option<String>,
     pub account_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub initial_account_id: Option<String>,
     #[serde(default)]
     pub attempted_account_ids: Vec<String>,
@@ -720,6 +976,9 @@ pub struct RequestLogSummary {
     pub gateway_mode: Option<String>,
     pub transparent_mode: Option<bool>,
     pub enhanced_mode: Option<bool>,
+    pub session_id: Option<String>,
+    pub session_title: Option<String>,
+    pub project_name: Option<String>,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
@@ -911,6 +1170,10 @@ pub struct StartupSnapshotResult {
     pub manual_preferred_account_id: Option<String>,
     pub request_log_today_summary: RequestLogTodaySummaryResult,
     pub request_logs: Vec<RequestLogSummary>,
+    #[serde(default)]
+    pub dashboard_token_usage: Vec<DashboardTokenUsageSummary>,
+    #[serde(default)]
+    pub dashboard_daily_token_usage: Vec<DashboardDailyTokenUsageBucket>,
 }
 
 #[cfg(test)]

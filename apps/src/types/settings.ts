@@ -41,7 +41,16 @@ export interface AppSettings {
   freeAccountMaxModel: string;
   freeAccountMaxModelOptions: string[];
   modelForwardRules: string;
+  modelRouterProbeFallbackModels: string;
   accountMaxInflight: number;
+  accountCooldownSeconds: number;
+  woolEnabled: boolean;
+  woolMaxInflightPerApi: number;
+  woolPoolMaxInflight: number;
+  woolPreflightWorkers: number;
+  woolCooldownSeconds: number;
+  woolPreflightTtlSeconds: number;
+  woolFailureThreshold: number;
   gatewayOriginator: string;
   gatewayOriginatorDefault: string;
   gatewayUserAgentVersion: string;

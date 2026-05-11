@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::fs;
 
 use codexmanager_core::rpc::types::{
     ManagedModelCatalogEntry, ManagedModelCatalogResult, ManagedModelCatalogUpsertParams,
@@ -30,6 +31,7 @@ const MODEL_SOURCE_KIND_CUSTOM: &str = "custom";
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn read_model_options(refresh_remote: bool) -> Result<ModelsResponse, String> {
+    ensure_codex_models_cache_seeded()?;
     read_managed_model_catalog(refresh_remote)
         .map(|catalog| managed_catalog_to_models_response(&catalog))
 }
@@ -62,6 +64,34 @@ pub(crate) fn read_model_options_from_storage(storage: &Storage) -> Result<Model
         .map(|catalog| managed_catalog_to_models_response(&catalog))
 }
 
+pub(crate) fn ensure_codex_models_cache_seeded() -> Result<(), String> {
+    let Some(cache_path) = crate::process_env::resolve_models_cache_path() else {
+        return Ok(());
+    };
+    if !cache_path.is_file() {
+        return Ok(());
+    }
+
+    let storage =
+        crate::storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let cache_text = fs::read_to_string(&cache_path)
+        .map_err(|err| format!("read models cache {} failed: {err}", cache_path.display()))?;
+    let cached_models = serde_json::from_str::<ModelsResponse>(&cache_text)
+        .map_err(|err| format!("parse models cache {} failed: {err}", cache_path.display()))?;
+    let normalized = normalize_models_response(cached_models);
+    if normalized.is_empty() {
+        return Ok(());
+    }
+
+    let existing = read_managed_model_catalog_from_storage(&storage)?;
+    let merged = merge_managed_model_catalog(existing, normalized);
+    if merged.items.is_empty() {
+        return Ok(());
+    }
+
+    save_managed_model_catalog_with_storage(&storage, &merged)
+}
+
 pub(crate) fn read_managed_model_catalog(
     refresh_remote: bool,
 ) -> Result<ManagedModelCatalogResult, String> {
@@ -69,33 +99,39 @@ pub(crate) fn read_managed_model_catalog(
         storage_helpers::open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let cached_catalog = read_managed_model_catalog_from_storage(&storage)?;
     let cached = managed_catalog_to_models_response(&cached_catalog);
-    if !refresh_remote && !cached.is_empty() {
-        return Ok(ensure_codex_image_tool_model_in_catalog(&cached_catalog));
+
+    let mut merged_sources = Vec::new();
+    let mut discovery_errors = Vec::new();
+
+    match crate::model_router_aggregate_api_models_response() {
+        Ok(models) if !models.is_empty() => merged_sources.push(models),
+        Ok(_) => {}
+        Err(err) => discovery_errors.push(format!("aggregate APIs: {err}")),
     }
 
     match gateway::fetch_models_for_picker() {
-        Ok(models) => {
-            let merged_catalog = ensure_codex_image_tool_model_in_catalog(
-                &merge_managed_model_catalog(cached_catalog.clone(), models),
-            );
-            if !merged_catalog.items.is_empty() {
-                let _ = save_managed_model_catalog_with_storage(&storage, &merged_catalog);
-            }
-            Ok(merged_catalog)
-        }
-        Err(err) => {
-            if !cached.is_empty() {
-                return Ok(ensure_codex_image_tool_model_in_catalog(&cached_catalog));
-            }
-            if refresh_remote {
-                Err(err)
-            } else {
-                Ok(ensure_codex_image_tool_model_in_catalog(
-                    &ManagedModelCatalogResult::default(),
-                ))
-            }
-        }
+        Ok(models) if !models.is_empty() => merged_sources.push(models),
+        Ok(_) => {}
+        Err(err) => discovery_errors.push(format!("openai picker: {err}")),
     }
+
+    if merged_sources.is_empty() {
+        if !cached.is_empty() {
+            return Ok(ensure_codex_image_tool_model_in_catalog(&cached_catalog));
+        }
+        if refresh_remote {
+            return Err(discovery_errors.join("; "));
+        }
+        return Ok(ensure_codex_image_tool_model_in_catalog(
+            &ManagedModelCatalogResult::default(),
+        ));
+    }
+
+    let merged_catalog = merge_managed_model_catalog_sources(cached_catalog, merged_sources);
+    if !merged_catalog.items.is_empty() {
+        let _ = save_managed_model_catalog_with_storage(&storage, &merged_catalog);
+    }
+    Ok(merged_catalog)
 }
 
 pub(crate) fn read_managed_model_catalog_from_storage(
@@ -452,6 +488,17 @@ fn merge_managed_model_catalog(
         items: merged_items,
         extra: merge_extra_maps(cached.extra, incoming_extra),
     })
+}
+
+fn merge_managed_model_catalog_sources(
+    cached: ManagedModelCatalogResult,
+    sources: Vec<ModelsResponse>,
+) -> ManagedModelCatalogResult {
+    let mut merged = normalize_managed_model_catalog(cached);
+    for source in sources {
+        merged = merge_managed_model_catalog(merged, source);
+    }
+    ensure_codex_image_tool_model_in_catalog(&merged)
 }
 
 pub(crate) fn normalize_models_response(response: ModelsResponse) -> ModelsResponse {
@@ -1228,10 +1275,11 @@ mod tests {
 
     use super::{
         ensure_codex_image_tool_model_in_catalog, ensure_codex_image_tool_model_listed,
-        managed_catalog_to_models_response, merge_managed_model_catalog, merge_models_response,
-        normalize_models_response, read_managed_model_catalog_from_storage,
-        read_model_options_from_storage, save_managed_model_catalog_with_storage,
-        save_model_options_with_storage, MODEL_SOURCE_KIND_CUSTOM, MODEL_SOURCE_KIND_REMOTE,
+        managed_catalog_to_models_response, merge_managed_model_catalog,
+        merge_managed_model_catalog_sources, merge_models_response, normalize_models_response,
+        read_managed_model_catalog_from_storage, read_model_options_from_storage,
+        save_managed_model_catalog_with_storage, save_model_options_with_storage,
+        MODEL_SOURCE_KIND_CUSTOM, MODEL_SOURCE_KIND_REMOTE,
     };
     use codexmanager_core::rpc::types::{
         ManagedModelCatalogEntry, ManagedModelCatalogResult, ModelInfo, ModelsResponse,
@@ -1505,6 +1553,149 @@ mod tests {
     }
 
     #[test]
+    fn ensure_codex_models_cache_seeded_imports_local_models_cache() {
+        let _guard = crate::test_env_guard();
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("codexmanager-model-cache-test-{unique_suffix}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let db_path = temp_dir.join("codexmanager.db");
+        let codex_home = temp_dir.join(".codex");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        let cache_path = codex_home.join("models_cache.json");
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&ModelsResponse {
+                models: vec![
+                    serde_json::from_value(json!({
+                        "slug": "mimo-v2.5-pro",
+                        "display_name": "MiMo V2.5 Pro",
+                        "description": "third party model",
+                        "supported_in_api": true,
+                        "visibility": "list"
+                    }))
+                    .expect("parse mimo model"),
+                    serde_json::from_value(json!({
+                        "slug": "gpt-5.4",
+                        "display_name": "GPT-5.4",
+                        "supported_in_api": true,
+                        "visibility": "list"
+                    }))
+                    .expect("parse gpt model"),
+                ],
+                extra: BTreeMap::new(),
+            })
+            .expect("serialize cache"),
+        )
+        .expect("write cache");
+        std::env::set_var("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+        std::env::set_var("CODEX_HOME", codex_home.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open storage");
+        storage.init().expect("init storage");
+        assert!(read_managed_model_catalog_from_storage(&storage)
+            .expect("read empty catalog")
+            .items
+            .is_empty());
+
+        super::ensure_codex_models_cache_seeded().expect("seed models cache");
+
+        let seeded =
+            read_managed_model_catalog_from_storage(&storage).expect("read seeded catalog");
+        assert!(seeded
+            .items
+            .iter()
+            .any(|item| item.model.slug == "mimo-v2.5-pro"));
+        assert!(seeded.items.iter().any(|item| item.model.slug == "gpt-5.4"));
+
+        let _ = std::fs::remove_file(cache_path);
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn ensure_codex_models_cache_seeded_merges_into_existing_catalog() {
+        let _guard = crate::test_env_guard();
+        let unique_suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "codexmanager-model-cache-merge-test-{unique_suffix}"
+        ));
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let db_path = temp_dir.join("codexmanager.db");
+        let codex_home = temp_dir.join(".codex");
+        std::fs::create_dir_all(&codex_home).expect("create codex home");
+        let cache_path = codex_home.join("models_cache.json");
+        std::fs::write(
+            &cache_path,
+            serde_json::to_string_pretty(&ModelsResponse {
+                models: vec![serde_json::from_value(json!({
+                    "slug": "mimo-v2.5-pro",
+                    "display_name": "MiMo V2.5 Pro",
+                    "description": "third party model",
+                    "supported_in_api": true,
+                    "visibility": "list"
+                }))
+                .expect("parse mimo model")],
+                extra: BTreeMap::new(),
+            })
+            .expect("serialize cache"),
+        )
+        .expect("write cache");
+        std::env::set_var("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+        std::env::set_var("CODEX_HOME", codex_home.to_string_lossy().as_ref());
+
+        let storage = Storage::open(&db_path).expect("open storage");
+        storage.init().expect("init storage");
+        save_managed_model_catalog_with_storage(
+            &storage,
+            &ManagedModelCatalogResult {
+                items: vec![ManagedModelCatalogEntry {
+                    model: serde_json::from_value(json!({
+                        "slug": "gpt-5.4",
+                        "display_name": "GPT-5.4 Existing",
+                        "description": "preserved existing model",
+                        "supported_in_api": true,
+                        "visibility": "list"
+                    }))
+                    .expect("parse existing gpt model"),
+                    source_kind: MODEL_SOURCE_KIND_CUSTOM.to_string(),
+                    user_edited: true,
+                    sort_index: 7,
+                    updated_at: 1_770_000_321,
+                }],
+                extra: BTreeMap::new(),
+            },
+        )
+        .expect("seed existing catalog");
+
+        super::ensure_codex_models_cache_seeded().expect("merge models cache");
+
+        let seeded =
+            read_managed_model_catalog_from_storage(&storage).expect("read merged catalog");
+        let gpt = seeded
+            .items
+            .iter()
+            .find(|item| item.model.slug == "gpt-5.4")
+            .expect("existing gpt model remains");
+        assert_eq!(gpt.model.display_name, "GPT-5.4 Existing");
+        assert!(gpt.user_edited);
+        assert!(seeded
+            .items
+            .iter()
+            .any(|item| item.model.slug == "mimo-v2.5-pro"));
+
+        let _ = std::fs::remove_file(cache_path);
+        let _ = std::fs::remove_file(db_path);
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn managed_catalog_round_trip_preserves_source_kind_and_user_overrides() {
         let storage = Storage::open_in_memory().expect("open storage");
         storage.init().expect("init storage");
@@ -1580,5 +1771,59 @@ mod tests {
         );
         assert_eq!(merged.items[0].source_kind, MODEL_SOURCE_KIND_REMOTE);
         assert!(merged.items[0].user_edited);
+    }
+
+    #[test]
+    fn merge_managed_catalog_sources_keeps_third_party_models_when_openai_picker_succeeds() {
+        let cached = ManagedModelCatalogResult {
+            items: vec![ManagedModelCatalogEntry {
+                model: serde_json::from_value(json!({
+                    "slug": "gpt-5.4",
+                    "display_name": "GPT-5.4",
+                    "supported_in_api": true
+                }))
+                .expect("parse cached model"),
+                source_kind: MODEL_SOURCE_KIND_REMOTE.to_string(),
+                user_edited: false,
+                sort_index: 0,
+                updated_at: 10,
+            }],
+            extra: BTreeMap::new(),
+        };
+        let aggregate = ModelsResponse {
+            models: vec![serde_json::from_value(json!({
+                "slug": "mimo-v2.5-pro",
+                "display_name": "MiMo V2.5 Pro",
+                "description": "来自聚合 API：mimo pro",
+                "supported_in_api": true,
+                "visibility": "list"
+            }))
+            .expect("parse aggregate model")],
+            extra: BTreeMap::new(),
+        };
+        let openai = ModelsResponse {
+            models: vec![serde_json::from_value(json!({
+                "slug": "gpt-5.4",
+                "display_name": "GPT-5.4",
+                "supported_in_api": true,
+                "visibility": "list"
+            }))
+            .expect("parse openai model")],
+            extra: BTreeMap::new(),
+        };
+
+        let merged = merge_managed_model_catalog_sources(cached, vec![aggregate, openai]);
+        assert_eq!(
+            merged
+                .items
+                .iter()
+                .map(|item| item.model.slug.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.4", "mimo-v2.5-pro", "gpt-image-2"]
+        );
+        assert!(merged
+            .items
+            .iter()
+            .any(|item| item.model.slug == "mimo-v2.5-pro"));
     }
 }

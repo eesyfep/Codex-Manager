@@ -23,8 +23,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// # 返回
 /// 无
 #[test]
-fn normalize_addr_defaults_to_localhost() {
-    assert_eq!(normalize_addr("5050").unwrap(), "localhost:5050");
+fn normalize_addr_defaults_to_loopback_ip() {
+    assert_eq!(normalize_addr("5050").unwrap(), "127.0.0.1:5050");
     assert_eq!(normalize_addr("localhost:5050").unwrap(), "localhost:5050");
     assert_eq!(normalize_addr("example.com").unwrap(), "example.com");
 }
@@ -165,7 +165,7 @@ fn rpc_call_falls_back_to_next_socket_after_empty_response() {
 
     let res = rpc_call_with_sockets(
         "initialize",
-        "localhost:48760",
+        "127.0.0.1:48760",
         &[bad_addr, good_addr],
         None,
     )

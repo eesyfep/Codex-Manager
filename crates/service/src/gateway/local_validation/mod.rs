@@ -16,6 +16,7 @@ pub(super) struct LocalValidationResult {
     pub(super) body: Bytes,
     pub(super) is_stream: bool,
     pub(super) has_prompt_cache_key: bool,
+    pub(super) conversation_id: Option<String>,
     pub(super) request_shape: Option<String>,
     pub(super) protocol_type: String,
     pub(super) rotation_strategy: String,

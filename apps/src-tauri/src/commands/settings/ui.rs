@@ -1,4 +1,4 @@
-use crate::app_storage::apply_runtime_storage_env;
+use crate::app_storage::{apply_runtime_storage_env, profile_service_addr_override};
 
 use super::tray_state::{
     effective_close_to_tray_requested, sync_window_runtime_state_from_settings, tray_available,
@@ -62,6 +62,7 @@ pub fn app_close_to_tray_on_close_set(app: tauri::AppHandle, enabled: bool) -> b
 #[tauri::command]
 pub async fn app_settings_get(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     apply_runtime_storage_env(&app);
+    let service_addr_override = profile_service_addr_override(&app);
     let mut settings = tauri::async_runtime::spawn_blocking(move || {
         codexmanager_service::app_settings_get_with_overrides(
             Some(effective_close_to_tray_requested()),
@@ -70,6 +71,9 @@ pub async fn app_settings_get(app: tauri::AppHandle) -> Result<serde_json::Value
     })
     .await
     .map_err(|err| format!("app_settings_get task failed: {err}"))??;
+    if let Some(addr) = service_addr_override {
+        settings["serviceAddr"] = serde_json::Value::String(addr.to_string());
+    }
     sync_window_runtime_state_from_settings(&mut settings);
     Ok(settings)
 }
@@ -89,14 +93,26 @@ pub async fn app_settings_get(app: tauri::AppHandle) -> Result<serde_json::Value
 #[tauri::command]
 pub async fn app_settings_set(
     app: tauri::AppHandle,
-    patch: serde_json::Value,
+    mut patch: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     apply_runtime_storage_env(&app);
+    let service_addr_override = profile_service_addr_override(&app);
+    if service_addr_override.is_some() {
+        if let Some(obj) = patch.as_object_mut() {
+            obj.remove("serviceAddr");
+            if let Some(nested) = obj.get_mut("patch").and_then(|value| value.as_object_mut()) {
+                nested.remove("serviceAddr");
+            }
+        }
+    }
     let mut settings = tauri::async_runtime::spawn_blocking(move || {
         codexmanager_service::app_settings_set(Some(&patch))
     })
     .await
     .map_err(|err| format!("app_settings_set task failed: {err}"))??;
+    if let Some(addr) = service_addr_override {
+        settings["serviceAddr"] = serde_json::Value::String(addr.to_string());
+    }
     sync_window_runtime_state_from_settings(&mut settings);
     Ok(settings)
 }

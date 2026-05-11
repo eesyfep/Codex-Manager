@@ -65,6 +65,7 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
                         &storage,
                         super::request_log::RequestLogTraceContext {
                             trace_id: Some(trace_id.as_str()),
+                            conversation_id: None,
                             original_path: Some(request_path_for_log.as_str()),
                             adapted_path: Some(request_path_for_log.as_str()),
                             response_adapter: None,
@@ -97,25 +98,21 @@ pub(crate) fn handle_gateway_request(mut request: Request) -> Result<(), String>
             }
         };
 
-    let request = if validated.rotation_strategy == crate::apikey_profile::ROTATION_AGGREGATE_API {
-        request
-    } else {
-        match super::maybe_respond_local_models(
-            request,
-            validated.trace_id.as_str(),
-            validated.key_id.as_str(),
-            validated.protocol_type.as_str(),
-            validated.original_path.as_str(),
-            validated.path.as_str(),
-            validated.response_adapter,
-            validated.request_method.as_str(),
-            validated.model_for_log.as_deref(),
-            validated.reasoning_for_log.as_deref(),
-            &validated.storage,
-        )? {
-            Some(request) => request,
-            None => return Ok(()),
-        }
+    let request = match super::maybe_respond_local_models(
+        request,
+        validated.trace_id.as_str(),
+        validated.key_id.as_str(),
+        validated.protocol_type.as_str(),
+        validated.original_path.as_str(),
+        validated.path.as_str(),
+        validated.response_adapter,
+        validated.request_method.as_str(),
+        validated.model_for_log.as_deref(),
+        validated.reasoning_for_log.as_deref(),
+        &validated.storage,
+    )? {
+        Some(request) => request,
+        None => return Ok(()),
     };
 
     let trace_id_for_count_tokens = validated.trace_id.clone();

@@ -123,9 +123,10 @@ mod upstream;
 pub(crate) use concurrency::current_gateway_concurrency_recommendation;
 pub(crate) use error_log::write_gateway_error_log;
 use metrics::{
-    account_inflight_count, acquire_account_inflight, begin_gateway_request,
-    record_gateway_candidate_skip, record_gateway_cooldown_mark, record_gateway_failover_attempt,
-    record_gateway_request_outcome, AccountInFlightGuard,
+    account_inflight_count, acquire_account_inflight, acquire_wool_inflight,
+    acquire_wool_preflight, begin_gateway_request, record_gateway_candidate_skip,
+    record_gateway_cooldown_mark, record_gateway_failover_attempt, record_gateway_request_outcome,
+    AccountInFlightGuard, WoolInFlightGuard, WoolPreflightGuard,
 };
 pub(crate) use metrics::{
     begin_rpc_request, duration_to_millis, gateway_metrics_prometheus,
@@ -377,6 +378,9 @@ fn decode_base64_header_value(input: &[u8]) -> Option<Vec<u8>> {
 
     Some(output)
 }
+pub(crate) use cooldown::{
+    current_account_default_cooldown_secs, set_account_default_cooldown_secs,
+};
 pub(super) use incoming_headers::IncomingHeaderSnapshot;
 use local_count_tokens::maybe_respond_local_count_tokens;
 use local_models::maybe_respond_local_models;
@@ -395,6 +399,13 @@ use runtime_config::{
     fresh_upstream_client_for_account, request_gate_wait_timeout, trace_body_preview_max_bytes,
     upstream_client_for_account, upstream_stream_timeout, upstream_total_timeout,
     DEFAULT_GATEWAY_DEBUG,
+};
+pub(crate) use runtime_config::{
+    set_wool_cooldown_seconds, set_wool_enabled, set_wool_failure_threshold,
+    set_wool_max_inflight_per_api, set_wool_pool_max_inflight, set_wool_preflight_ttl_seconds,
+    set_wool_preflight_workers, wool_cooldown_seconds, wool_enabled, wool_failure_threshold,
+    wool_max_inflight_per_api, wool_pool_max_inflight, wool_preflight_ttl_seconds,
+    wool_preflight_workers,
 };
 use selection::collect_gateway_candidates;
 pub(crate) use selection::invalidate_candidate_cache;
@@ -456,6 +467,11 @@ pub(crate) fn set_route_strategy(strategy: &str) -> Result<&'static str, String>
     let applied = route_hint::set_route_strategy(strategy)?;
     std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", applied);
     Ok(applied)
+}
+
+pub(crate) fn invalidate_aggregate_api_routing_state() {
+    selection::invalidate_candidate_cache();
+    route_hint::reset_route_state();
 }
 
 /// 函数 `current_free_account_max_model`

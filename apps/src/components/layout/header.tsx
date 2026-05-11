@@ -22,7 +22,7 @@ import {
 } from "@/lib/utils/service";
 import { getTopLevelRouteLabel } from "@/lib/app-shell/top-level-routes";
 
-const DEFAULT_SERVICE_ADDR = "localhost:48760";
+const DEFAULT_SERVICE_ADDR = "127.0.0.1:48760";
 
 /**
  * 函数 `Header`
@@ -109,7 +109,7 @@ export function Header() {
   const handleToggleService = async (enabled: boolean) => {
     setIsToggling(true);
     try {
-      const nextAddr = await persistServiceAddr(serviceStatus.addr || `localhost:${portInput}`);
+      const nextAddr = await persistServiceAddr(serviceStatus.addr || `127.0.0.1:${portInput}`);
       if (enabled) {
         await serviceClient.start(nextAddr);
         const initResult = await serviceClient.initialize(nextAddr);
@@ -149,7 +149,7 @@ export function Header() {
    */
   const handlePortBlur = async () => {
     try {
-      const nextAddr = await persistServiceAddr(`localhost:${portInput}`);
+      const nextAddr = await persistServiceAddr(`127.0.0.1:${portInput}`);
       setServiceStatus({ addr: nextAddr });
     } catch (error: unknown) {
       toast.error(`${t("保存")}失败: ${formatServiceError(error)}`);
@@ -187,7 +187,7 @@ export function Header() {
                   const nextPort = event.target.value.replace(/[^\d]/g, "");
                   setPortInput(nextPort);
                   if (nextPort) {
-                    setServiceStatus({ addr: `localhost:${nextPort}` });
+                    setServiceStatus({ addr: `127.0.0.1:${nextPort}` });
                   }
                 }}
                 onBlur={() => void handlePortBlur()}

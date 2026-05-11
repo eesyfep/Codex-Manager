@@ -295,8 +295,19 @@ fn ensure_prompt_cache_key(
     true
 }
 
+fn model_prefers_tool_defaults_omitted(obj: &Map<String, Value>) -> bool {
+    obj.get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|model| model.to_ascii_lowercase())
+        .is_some_and(|model| model.contains("mimo") || model.contains("minimax"))
+}
+
 fn ensure_tool_choice_auto(path: &str, obj: &mut Map<String, Value>) -> bool {
     if !is_standard_responses_path(path) {
+        return false;
+    }
+    if model_prefers_tool_defaults_omitted(obj) {
         return false;
     }
     match obj.get("tool_choice") {
@@ -325,6 +336,9 @@ fn ensure_tools_list(path: &str, obj: &mut Map<String, Value>) -> bool {
 
 fn ensure_parallel_tool_calls_bool(path: &str, obj: &mut Map<String, Value>) -> bool {
     if !is_responses_path(path) {
+        return false;
+    }
+    if model_prefers_tool_defaults_omitted(obj) {
         return false;
     }
     match obj.get("parallel_tool_calls") {
@@ -750,5 +764,34 @@ mod tests {
                 .and_then(Value::as_str),
             Some("install-1")
         );
+    }
+
+    #[test]
+    fn mimo_responses_request_omits_forced_tool_choice_and_parallel_tool_defaults() {
+        let mut obj = serde_json::json!({
+            "model": "mimo-v2.5-pro",
+            "input": [{
+                "role": "user",
+                "content": [{"type":"input_text","text":"use tools if needed"}]
+            }]
+        })
+        .as_object()
+        .cloned()
+        .expect("object");
+
+        let result = apply_codex_http_request_rules(
+            "/v1/responses",
+            &mut obj,
+            true,
+            Some("thread-mimo"),
+            false,
+            Some("install-1"),
+        );
+
+        assert!(result.changed);
+        assert!(obj.get("tool_choice").is_none());
+        assert!(obj.get("parallel_tool_calls").is_none());
+        assert_eq!(obj.get("stream").and_then(Value::as_bool), Some(true));
+        assert!(obj.get("tools").and_then(Value::as_array).is_some());
     }
 }

@@ -7,25 +7,38 @@ use std::collections::BTreeMap;
 
 use super::{
     current_background_tasks_snapshot_value, current_close_to_tray_on_close_setting,
-    current_codex_cli_guide_dismissed, current_env_overrides, current_gateway_account_max_inflight,
+    current_codex_cli_guide_dismissed, current_env_overrides,
+    current_gateway_account_cooldown_seconds, current_gateway_account_max_inflight,
     current_gateway_free_account_max_model, current_gateway_model_forward_rules,
     current_gateway_originator, current_gateway_residency_requirement,
     current_gateway_sse_keepalive_interval_ms, current_gateway_upstream_stream_timeout_ms,
     current_gateway_upstream_total_timeout_ms, current_gateway_user_agent_version,
-    current_lightweight_mode_on_close_to_tray_setting, current_saved_service_addr,
+    current_gateway_wool_cooldown_seconds, current_gateway_wool_enabled,
+    current_gateway_wool_failure_threshold, current_gateway_wool_max_inflight_per_api,
+    current_gateway_wool_pool_max_inflight, current_gateway_wool_preflight_ttl_seconds,
+    current_gateway_wool_preflight_workers, current_lightweight_mode_on_close_to_tray_setting,
+    current_model_router_probe_fallback_models, current_saved_service_addr,
     current_service_bind_mode, current_ui_appearance_preset, current_ui_locale,
     current_ui_low_transparency_enabled, current_ui_theme, current_update_auto_check_enabled,
     default_gateway_originator, default_gateway_user_agent_version, env_override_catalog_value,
     env_override_reserved_keys, env_override_unsupported_keys, residency_requirement_options,
     save_env_overrides_value, save_persisted_app_setting, save_persisted_bool_setting,
     sync_runtime_settings_from_storage, APP_SETTING_CLOSE_TO_TRAY_ON_CLOSE_KEY,
-    APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY, APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY,
-    APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY, APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY,
-    APP_SETTING_GATEWAY_ORIGINATOR_KEY, APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY,
-    APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY, APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY,
-    APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY, APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
+    APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY, APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_BACKGROUND_TASKS_KEY, APP_SETTING_GATEWAY_FREE_ACCOUNT_MAX_MODEL_KEY,
+    APP_SETTING_GATEWAY_MODEL_FORWARD_RULES_KEY, APP_SETTING_GATEWAY_ORIGINATOR_KEY,
+    APP_SETTING_GATEWAY_RESIDENCY_REQUIREMENT_KEY, APP_SETTING_GATEWAY_ROUTE_STRATEGY_KEY,
+    APP_SETTING_GATEWAY_SSE_KEEPALIVE_INTERVAL_MS_KEY, APP_SETTING_GATEWAY_UPSTREAM_PROXY_URL_KEY,
+    APP_SETTING_GATEWAY_UPSTREAM_STREAM_TIMEOUT_MS_KEY,
     APP_SETTING_GATEWAY_UPSTREAM_TOTAL_TIMEOUT_MS_KEY, APP_SETTING_GATEWAY_USER_AGENT_VERSION_KEY,
-    APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY, APP_SETTING_PLUGIN_MARKET_MODE_KEY,
+    APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY, APP_SETTING_GATEWAY_WOOL_ENABLED_KEY,
+    APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY,
+    APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY,
+    APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY,
+    APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY,
+    APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY,
+    APP_SETTING_LIGHTWEIGHT_MODE_ON_CLOSE_TO_TRAY_KEY,
+    APP_SETTING_MODEL_ROUTER_PROBE_FALLBACK_MODELS_KEY, APP_SETTING_PLUGIN_MARKET_MODE_KEY,
     APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY, APP_SETTING_SERVICE_ADDR_KEY,
     APP_SETTING_UI_APPEARANCE_PRESET_KEY, APP_SETTING_UI_CODEX_CLI_GUIDE_DISMISSED_KEY,
     APP_SETTING_UI_LOCALE_KEY, APP_SETTING_UI_LOW_TRANSPARENCY_KEY, APP_SETTING_UI_THEME_KEY,
@@ -111,7 +124,16 @@ pub(super) fn current_app_settings_value(
     let route_strategy = crate::gateway::current_route_strategy().to_string();
     let free_account_max_model = current_gateway_free_account_max_model();
     let model_forward_rules = current_gateway_model_forward_rules();
+    let model_router_probe_fallback_models = current_model_router_probe_fallback_models();
     let account_max_inflight = current_gateway_account_max_inflight();
+    let account_cooldown_seconds = current_gateway_account_cooldown_seconds();
+    let wool_enabled = current_gateway_wool_enabled();
+    let wool_max_inflight_per_api = current_gateway_wool_max_inflight_per_api();
+    let wool_pool_max_inflight = current_gateway_wool_pool_max_inflight();
+    let wool_preflight_workers = current_gateway_wool_preflight_workers();
+    let wool_cooldown_seconds = current_gateway_wool_cooldown_seconds();
+    let wool_preflight_ttl_seconds = current_gateway_wool_preflight_ttl_seconds();
+    let wool_failure_threshold = current_gateway_wool_failure_threshold();
     let gateway_originator = current_gateway_originator();
     let gateway_user_agent_version = current_gateway_user_agent_version();
     let gateway_originator_default = default_gateway_originator();
@@ -156,7 +178,16 @@ pub(super) fn current_app_settings_value(
         &route_strategy,
         &free_account_max_model,
         &model_forward_rules,
+        &model_router_probe_fallback_models,
         account_max_inflight,
+        account_cooldown_seconds,
+        wool_enabled,
+        wool_max_inflight_per_api,
+        wool_pool_max_inflight,
+        wool_preflight_workers,
+        wool_cooldown_seconds,
+        wool_preflight_ttl_seconds,
+        wool_failure_threshold,
         &gateway_originator,
         &gateway_user_agent_version,
         &gateway_residency_requirement,
@@ -198,7 +229,16 @@ pub(super) fn current_app_settings_value(
         "routeStrategyOptions": ["ordered", "balanced"],
         "freeAccountMaxModel": free_account_max_model,
         "modelForwardRules": model_forward_rules,
+        "modelRouterProbeFallbackModels": model_router_probe_fallback_models,
         "accountMaxInflight": account_max_inflight,
+        "accountCooldownSeconds": account_cooldown_seconds,
+        "woolEnabled": wool_enabled,
+        "woolMaxInflightPerApi": wool_max_inflight_per_api,
+        "woolPoolMaxInflight": wool_pool_max_inflight,
+        "woolPreflightWorkers": wool_preflight_workers,
+        "woolCooldownSeconds": wool_cooldown_seconds,
+        "woolPreflightTtlSeconds": wool_preflight_ttl_seconds,
+        "woolFailureThreshold": wool_failure_threshold,
         "freeAccountMaxModelOptions": free_account_max_model_options,
         "gatewayOriginator": gateway_originator,
         "gatewayOriginatorDefault": gateway_originator_default,
@@ -342,7 +382,16 @@ fn persist_current_snapshot(
     route_strategy: &str,
     free_account_max_model: &str,
     model_forward_rules: &str,
+    model_router_probe_fallback_models: &str,
     account_max_inflight: usize,
+    account_cooldown_seconds: i64,
+    wool_enabled: bool,
+    wool_max_inflight_per_api: usize,
+    wool_pool_max_inflight: usize,
+    wool_preflight_workers: usize,
+    wool_cooldown_seconds: u64,
+    wool_preflight_ttl_seconds: u64,
+    wool_failure_threshold: usize,
     gateway_originator: &str,
     gateway_user_agent_version: &str,
     gateway_residency_requirement: &str,
@@ -392,8 +441,45 @@ fn persist_current_snapshot(
         },
     );
     let _ = save_persisted_app_setting(
+        APP_SETTING_MODEL_ROUTER_PROBE_FALLBACK_MODELS_KEY,
+        if model_router_probe_fallback_models.trim().is_empty() {
+            None
+        } else {
+            Some(model_router_probe_fallback_models)
+        },
+    );
+    let _ = save_persisted_app_setting(
         APP_SETTING_GATEWAY_ACCOUNT_MAX_INFLIGHT_KEY,
         Some(&account_max_inflight.to_string()),
+    );
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_ACCOUNT_COOLDOWN_SECONDS_KEY,
+        Some(&account_cooldown_seconds.to_string()),
+    );
+    let _ = save_persisted_bool_setting(APP_SETTING_GATEWAY_WOOL_ENABLED_KEY, wool_enabled);
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_MAX_INFLIGHT_PER_API_KEY,
+        Some(&wool_max_inflight_per_api.to_string()),
+    );
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_POOL_MAX_INFLIGHT_KEY,
+        Some(&wool_pool_max_inflight.to_string()),
+    );
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_PREFLIGHT_WORKERS_KEY,
+        Some(&wool_preflight_workers.to_string()),
+    );
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_COOLDOWN_SECONDS_KEY,
+        Some(&wool_cooldown_seconds.to_string()),
+    );
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_PREFLIGHT_TTL_SECONDS_KEY,
+        Some(&wool_preflight_ttl_seconds.to_string()),
+    );
+    let _ = save_persisted_app_setting(
+        APP_SETTING_GATEWAY_WOOL_FAILURE_THRESHOLD_KEY,
+        Some(&wool_failure_threshold.to_string()),
     );
     let _ =
         save_persisted_app_setting(APP_SETTING_GATEWAY_ORIGINATOR_KEY, Some(gateway_originator));

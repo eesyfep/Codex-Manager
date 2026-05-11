@@ -127,6 +127,26 @@ pub(crate) fn apply_balanced_round_robin<T>(
     }
 }
 
+pub(crate) fn apply_balanced_round_robin_with_scope<T>(
+    candidates: &mut [T],
+    key_id: &str,
+    model: Option<&str>,
+    scope: &str,
+) {
+    ensure_route_config_loaded();
+    if candidates.len() <= 1 {
+        return;
+    }
+    let scoped_model = match model.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(model) => format!("{model}|{scope}"),
+        None => scope.to_string(),
+    };
+    let start = next_start_index(key_id, Some(scoped_model.as_str()), candidates.len());
+    if start > 0 {
+        candidates.rotate_left(start);
+    }
+}
+
 /// 函数 `rotate_to_manual_preferred_account`
 ///
 /// 作者: gaohongshun
@@ -245,13 +265,17 @@ pub(crate) fn set_route_strategy(strategy: &str) -> Result<&'static str, String>
         );
     };
     ROUTE_MODE.store(mode, Ordering::Relaxed);
+    reset_route_state();
+    Ok(route_mode_label(mode))
+}
+
+pub(crate) fn reset_route_state() {
     if let Some(lock) = ROUTE_STATE.get() {
         let mut state = crate::lock_utils::lock_recover(lock, "route_state");
         state.next_start_by_key_model.clear();
         state.p2c_nonce_by_key_model.clear();
         state.maintenance_tick = 0;
     }
-    Ok(route_mode_label(mode))
 }
 
 /// 函数 `get_manual_preferred_account`

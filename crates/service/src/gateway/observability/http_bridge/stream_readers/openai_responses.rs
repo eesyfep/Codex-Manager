@@ -3,115 +3,67 @@ use super::{
     stream_idle_timed_out, stream_idle_timeout_message, stream_reader_disconnected_message,
     stream_wait_timeout, upstream_hint_or_stream_incomplete_message, Arc, Cursor, Mutex,
     OpenAIResponsesEvent, PassthroughSseCollector, Read, SseKeepAliveFrame, SseTerminal,
+    UpstreamSseFramePump, UpstreamSseFramePumpItem,
 };
 use crate::gateway::upstream::{GatewayByteStream, GatewayByteStreamItem, GatewayStreamResponse};
-use eventsource_stream::{Event, Eventsource};
-use futures_util::pin_mut;
-use futures_util::stream::unfold;
-use futures_util::task::noop_waker_ref;
-use futures_util::Stream;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::task::{Context, Poll};
-use std::thread;
+use bytes::Bytes;
+use serde_json::json;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
-const OPENAI_RESPONSES_SSE_CHANNEL_CAPACITY: usize = 128;
-const OPENAI_RESPONSES_SIDECAR_DRAIN_TIMEOUT: Duration = Duration::from_millis(50);
-
-#[derive(Debug)]
-enum OpenAIResponsesSidecarItem {
-    Event(OpenAIResponsesEvent),
-    Eof,
-    Error(String),
-}
-
-struct OpenAIResponsesSidecarObserver {
-    rx: Receiver<OpenAIResponsesSidecarItem>,
-}
-
-impl OpenAIResponsesSidecarObserver {
-    fn new(byte_stream: GatewayByteStream) -> Self {
-        let (tx, rx) =
-            mpsc::sync_channel::<OpenAIResponsesSidecarItem>(OPENAI_RESPONSES_SSE_CHANNEL_CAPACITY);
-        thread::spawn(move || {
-            let byte_stream = unfold(Some(byte_stream), |state| async move {
-                let byte_stream = state?;
-                match byte_stream.recv() {
-                    Ok(GatewayByteStreamItem::Chunk(bytes)) => Some((Ok(bytes), Some(byte_stream))),
-                    Ok(GatewayByteStreamItem::Eof) => None,
-                    Ok(GatewayByteStreamItem::Error(err)) => Some((Err(err), None)),
-                    Err(_) => None,
-                }
-            });
-
-            let stream = byte_stream.eventsource();
-            pin_mut!(stream);
-            let waker = noop_waker_ref();
-            let mut cx = Context::from_waker(waker);
-
-            loop {
-                match stream.as_mut().poll_next(&mut cx) {
-                    Poll::Ready(Some(Ok(event))) => {
-                        let lines = event_to_sse_lines(&event);
-                        if let Some(parsed) = OpenAIResponsesEvent::parse(&lines) {
-                            if tx.send(OpenAIResponsesSidecarItem::Event(parsed)).is_err() {
-                                return;
-                            }
-                        }
-                    }
-                    Poll::Ready(Some(Err(err))) => {
-                        let _ = tx.send(OpenAIResponsesSidecarItem::Error(err.to_string()));
-                        return;
-                    }
-                    Poll::Ready(None) => {
-                        let _ = tx.send(OpenAIResponsesSidecarItem::Eof);
-                        return;
-                    }
-                    Poll::Pending => thread::yield_now(),
-                }
-            }
-        });
-        Self { rx }
-    }
-
-    fn try_recv(&self) -> Result<OpenAIResponsesSidecarItem, mpsc::TryRecvError> {
-        self.rx.try_recv()
-    }
-
-    fn recv_timeout(
-        &self,
-        timeout: Duration,
-    ) -> Result<OpenAIResponsesSidecarItem, RecvTimeoutError> {
-        self.rx.recv_timeout(timeout)
-    }
-}
-
-fn event_to_sse_lines(event: &Event) -> Vec<String> {
-    let mut lines = Vec::new();
-    if !event.id.is_empty() {
-        lines.push(format!("id: {}\n", event.id));
-    }
-    if let Some(retry) = event.retry {
-        lines.push(format!("retry: {}\n", retry.as_millis()));
-    }
-    if !event.event.is_empty() && !event.event.eq_ignore_ascii_case("message") {
-        lines.push(format!("event: {}\n", event.event));
-    }
-    for data_line in event.data.split('\n') {
-        lines.push(format!("data: {data_line}\n"));
-    }
-    lines.push("\n".to_string());
-    lines
-}
-
 pub(crate) struct OpenAIResponsesPassthroughSseReader {
-    raw_upstream: GatewayByteStream,
-    observer: OpenAIResponsesSidecarObserver,
+    upstream: UpstreamSseFramePump,
     out_cursor: Cursor<Vec<u8>>,
     usage_collector: Arc<Mutex<PassthroughSseCollector>>,
     request_started_at: Instant,
     last_upstream_activity: Instant,
+    saw_upstream_frame: bool,
+    handshake_sent: bool,
+    synthetic_response_id: String,
+    no_upstream_after_handshake_timeout: Option<Duration>,
     finished: bool,
+}
+
+struct GatewayByteStreamReader {
+    stream: GatewayByteStream,
+    current: Cursor<Bytes>,
+    eof: bool,
+}
+
+impl GatewayByteStreamReader {
+    fn new(stream: GatewayByteStream) -> Self {
+        Self {
+            stream,
+            current: Cursor::new(Bytes::new()),
+            eof: false,
+        }
+    }
+}
+
+impl Read for GatewayByteStreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let read = self.current.read(buf)?;
+            if read > 0 {
+                return Ok(read);
+            }
+            if self.eof {
+                return Ok(0);
+            }
+            match self.stream.recv() {
+                Ok(GatewayByteStreamItem::Chunk(bytes)) => {
+                    self.current = Cursor::new(bytes);
+                }
+                Ok(GatewayByteStreamItem::Eof) | Err(_) => {
+                    self.eof = true;
+                    return Ok(0);
+                }
+                Ok(GatewayByteStreamItem::Error(err)) => {
+                    return Err(std::io::Error::other(err));
+                }
+            }
+        }
+    }
 }
 
 impl OpenAIResponsesPassthroughSseReader {
@@ -135,16 +87,27 @@ impl OpenAIResponsesPassthroughSseReader {
         _keepalive_frame: SseKeepAliveFrame,
         request_started_at: Instant,
     ) -> Self {
-        let (raw_upstream, sidecar_upstream) = upstream.into_body().tee();
+        let upstream_reader = GatewayByteStreamReader::new(upstream.into_body());
         Self {
-            raw_upstream,
-            observer: OpenAIResponsesSidecarObserver::new(sidecar_upstream),
+            upstream: UpstreamSseFramePump::from_reader(upstream_reader),
             out_cursor: Cursor::new(Vec::new()),
             usage_collector,
             request_started_at,
             last_upstream_activity: Instant::now(),
+            saw_upstream_frame: false,
+            handshake_sent: false,
+            synthetic_response_id: "resp_codexmanager_openai_passthrough".to_string(),
+            no_upstream_after_handshake_timeout: None,
             finished: false,
         }
+    }
+
+    pub(crate) fn with_no_upstream_after_handshake_timeout(
+        mut self,
+        timeout: Option<Duration>,
+    ) -> Self {
+        self.no_upstream_after_handshake_timeout = timeout;
+        self
     }
 
     fn update_usage_from_event(&self, event: OpenAIResponsesEvent) {
@@ -165,115 +128,161 @@ impl OpenAIResponsesPassthroughSseReader {
         }
     }
 
-    fn drain_sidecar_events(&self) {
-        loop {
-            match self.observer.try_recv() {
-                Ok(OpenAIResponsesSidecarItem::Event(event)) => {
-                    self.update_usage_from_event(event);
-                }
-                Ok(OpenAIResponsesSidecarItem::Eof) => return,
-                Ok(OpenAIResponsesSidecarItem::Error(err)) => {
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        collector
-                            .terminal_error
-                            .get_or_insert_with(|| classify_upstream_stream_read_error(&err));
-                    }
-                    return;
-                }
-                Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => return,
-            }
-        }
+    fn sse_event(event: &str, payload: serde_json::Value) -> Vec<u8> {
+        format!(
+            "event: {event}\ndata: {}\n\n",
+            serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
+        )
+        .into_bytes()
     }
 
-    fn drain_sidecar_with_deadline(&self, timeout: Duration) {
-        let deadline = Instant::now() + timeout;
-        loop {
-            self.drain_sidecar_events();
-            let now = Instant::now();
-            if now >= deadline {
-                return;
-            }
-            match self
-                .observer
-                .recv_timeout(deadline.saturating_duration_since(now))
-            {
-                Ok(OpenAIResponsesSidecarItem::Event(event)) => {
-                    self.update_usage_from_event(event);
-                }
-                Ok(OpenAIResponsesSidecarItem::Eof) => return,
-                Ok(OpenAIResponsesSidecarItem::Error(err)) => {
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        collector
-                            .terminal_error
-                            .get_or_insert_with(|| classify_upstream_stream_read_error(&err));
-                    }
-                    return;
-                }
-                Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return,
-            }
+    fn handshake_events(&mut self) -> Vec<u8> {
+        if self.handshake_sent {
+            return Vec::new();
         }
+        self.handshake_sent = true;
+        if let Ok(mut collector) = self.usage_collector.lock() {
+            collector.last_event_type = Some("response.in_progress".to_string());
+        }
+        let created = Self::sse_event(
+            "response.created",
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": self.synthetic_response_id,
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "gpt-5.5",
+                    "status": "in_progress"
+                }
+            }),
+        );
+        let in_progress = Self::sse_event(
+            "response.in_progress",
+            json!({
+                "type": "response.in_progress",
+                "response": {
+                    "id": self.synthetic_response_id,
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "gpt-5.5",
+                    "status": "in_progress"
+                }
+            }),
+        );
+        [created, in_progress].concat()
+    }
+
+    fn failed_event(&self, message: &str) -> Vec<u8> {
+        Self::sse_event(
+            "response.failed",
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "id": self.synthetic_response_id,
+                    "object": "response",
+                    "created_at": 0,
+                    "model": "gpt-5.5",
+                    "status": "failed",
+                    "error": {
+                        "message": message,
+                        "type": "upstream_error",
+                        "code": "upstream_error"
+                    }
+                }
+            }),
+        )
+    }
+
+    fn finish_with_failed_event(&mut self, message: String) -> Vec<u8> {
+        self.finished = true;
+        let mut out = Vec::new();
+        if !self.handshake_sent {
+            out.extend(self.handshake_events());
+        }
+        if let Ok(mut collector) = self.usage_collector.lock() {
+            collector.last_event_type = Some("response.failed".to_string());
+            collector.saw_terminal = true;
+            collector.upstream_error_hint.get_or_insert(message.clone());
+            collector.terminal_error.get_or_insert(message.clone());
+        }
+        out.extend(self.failed_event(message.as_str()));
+        out
     }
 
     fn next_chunk(&mut self) -> std::io::Result<Vec<u8>> {
         loop {
-            self.drain_sidecar_events();
             match self
-                .raw_upstream
+                .upstream
                 .recv_timeout(stream_wait_timeout(self.last_upstream_activity))
             {
-                Ok(GatewayByteStreamItem::Chunk(bytes)) => {
+                Ok(UpstreamSseFramePumpItem::Frame(frame)) => {
                     self.last_upstream_activity = Instant::now();
+                    self.saw_upstream_frame = true;
                     mark_first_response_ms(&self.usage_collector, self.request_started_at);
-                    self.drain_sidecar_events();
-                    return Ok(bytes.to_vec());
-                }
-                Ok(GatewayByteStreamItem::Eof) => {
-                    self.drain_sidecar_with_deadline(OPENAI_RESPONSES_SIDECAR_DRAIN_TIMEOUT);
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        if !collector.saw_terminal {
-                            let hint = collector.upstream_error_hint.clone();
-                            collector.terminal_error.get_or_insert_with(|| {
-                                upstream_hint_or_stream_incomplete_message(hint.as_deref())
-                            });
+                    if let Some(event) = OpenAIResponsesEvent::parse(&frame) {
+                        let is_terminal = event.terminal.is_some();
+                        self.update_usage_from_event(event);
+                        if is_terminal {
+                            self.finished = true;
                         }
                     }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    return Ok(frame.concat().into_bytes());
                 }
-                Ok(GatewayByteStreamItem::Error(err)) => {
-                    self.last_upstream_activity = Instant::now();
-                    self.drain_sidecar_with_deadline(OPENAI_RESPONSES_SIDECAR_DRAIN_TIMEOUT);
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        collector
-                            .terminal_error
-                            .get_or_insert_with(|| classify_upstream_stream_read_error(&err));
+                Ok(UpstreamSseFramePumpItem::Eof) => {
+                    let terminal_seen = self
+                        .usage_collector
+                        .lock()
+                        .map(|collector| collector.saw_terminal)
+                        .unwrap_or(false);
+                    if !terminal_seen {
+                        let hint = self
+                            .usage_collector
+                            .lock()
+                            .ok()
+                            .and_then(|collector| collector.upstream_error_hint.clone());
+                        return Ok(self.finish_with_failed_event(
+                            upstream_hint_or_stream_incomplete_message(hint.as_deref()),
+                        ));
                     }
                     self.finished = true;
                     return Ok(Vec::new());
+                }
+                Ok(UpstreamSseFramePumpItem::Error(err)) => {
+                    self.last_upstream_activity = Instant::now();
+                    return Ok(
+                        self.finish_with_failed_event(classify_upstream_stream_read_error(&err))
+                    );
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    self.drain_sidecar_events();
+                    if !self.saw_upstream_frame && !self.handshake_sent {
+                        mark_first_response_ms(&self.usage_collector, self.request_started_at);
+                        return Ok(self.handshake_events());
+                    }
+                    if self.handshake_sent
+                        && !self.saw_upstream_frame
+                        && self
+                            .no_upstream_after_handshake_timeout
+                            .is_some_and(|timeout| self.last_upstream_activity.elapsed() >= timeout)
+                    {
+                        return Ok(self.finish_with_failed_event(
+                            "低质量中转兼容模式：上游首帧等待超时".to_string(),
+                        ));
+                    }
                     if stream_idle_timed_out(self.last_upstream_activity) {
-                        if let Ok(mut collector) = self.usage_collector.lock() {
-                            collector
-                                .terminal_error
-                                .get_or_insert_with(stream_idle_timeout_message);
-                        }
-                        self.finished = true;
-                        return Ok(Vec::new());
+                        return Ok(self.finish_with_failed_event(stream_idle_timeout_message()));
                     }
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    self.drain_sidecar_with_deadline(OPENAI_RESPONSES_SIDECAR_DRAIN_TIMEOUT);
-                    if let Ok(mut collector) = self.usage_collector.lock() {
-                        let hint = collector.upstream_error_hint.clone();
-                        collector.terminal_error.get_or_insert_with(|| {
-                            hint.unwrap_or_else(stream_reader_disconnected_message)
-                        });
-                    }
-                    self.finished = true;
-                    return Ok(Vec::new());
+                    let hint = self
+                        .usage_collector
+                        .lock()
+                        .ok()
+                        .and_then(|collector| collector.upstream_error_hint.clone());
+                    return Ok(self.finish_with_failed_event(
+                        hint.unwrap_or_else(stream_reader_disconnected_message),
+                    ));
                 }
             }
         }

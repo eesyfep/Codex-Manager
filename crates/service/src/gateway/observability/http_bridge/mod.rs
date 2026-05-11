@@ -13,9 +13,10 @@ use aggregate::{
     append_output_text, collect_output_text_from_event_fields, collect_response_output_text,
 };
 use aggregate::{
-    collect_non_stream_json_from_sse_bytes, extract_error_hint_from_body,
-    extract_error_message_from_json, inspect_sse_frame_for_protocol, looks_like_sse_payload,
-    merge_usage, parse_usage_from_json, reload_output_text_from_env, usage_has_signal, SseTerminal,
+    chat_completion_response_value, collect_non_stream_json_from_sse_bytes,
+    extract_error_hint_from_body, extract_error_message_from_json, inspect_sse_frame_for_protocol,
+    lifecycle_sse_bytes, looks_like_sse_payload, merge_usage, parse_usage_from_json,
+    reload_output_text_from_env, usage_has_signal, ChatToResponsesLifecycle, SseTerminal,
     UpstreamResponseBridgeResult, UpstreamResponseUsage,
 };
 #[cfg(test)]
@@ -373,6 +374,7 @@ pub(super) fn respond_with_upstream(
     trace_id: Option<&str>,
     fallback_model: Option<&str>,
     request_started_at: std::time::Instant,
+    no_upstream_after_handshake_timeout: Option<std::time::Duration>,
 ) -> Result<UpstreamResponseBridgeResult, String> {
     match upstream {
         GatewayUpstreamResponse::Blocking(upstream) => delivery::respond_with_upstream(
@@ -389,6 +391,7 @@ pub(super) fn respond_with_upstream(
             trace_id,
             fallback_model,
             request_started_at,
+            no_upstream_after_handshake_timeout,
         ),
         GatewayUpstreamResponse::Stream(upstream) => delivery::respond_with_stream_upstream(
             request,
@@ -404,13 +407,14 @@ pub(super) fn respond_with_upstream(
             trace_id,
             fallback_model,
             request_started_at,
+            no_upstream_after_handshake_timeout,
         ),
     }
 }
 pub(super) use stream_readers::{
     ChatCompletionsFromResponsesSseReader, ImagesFromResponsesSseReader,
     OpenAIResponsesPassthroughSseReader, PassthroughSseCollector, PassthroughSseUsageReader,
-    SseKeepAliveFrame,
+    ResponsesFromChatCompletionsSseReader, SseKeepAliveFrame,
 };
 
 pub(super) use stream_readers::{AnthropicSseReader, GeminiSseReader};

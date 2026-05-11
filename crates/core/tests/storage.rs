@@ -1,5 +1,5 @@
 use codexmanager_core::storage::{
-    now_ts, Account, ApiKey, Event, RequestLog, RequestTokenStat, Storage, Token,
+    now_ts, Account, AggregateApi, ApiKey, Event, RequestLog, RequestTokenStat, Storage, Token,
     UsageSnapshotRecord,
 };
 
@@ -111,6 +111,52 @@ fn storage_can_find_token_and_account_by_account_id() {
         .find_token_by_account_id("missing-account")
         .expect("find missing token")
         .is_none());
+}
+
+#[test]
+fn aggregate_api_fast_is_persisted_and_updateable() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init schema");
+    let now = now_ts();
+
+    storage
+        .insert_aggregate_api(&AggregateApi {
+            id: "agg-fast".to_string(),
+            provider_type: "codex".to_string(),
+            supplier_name: Some("fast upstream".to_string()),
+            sort: 0,
+            url: "https://example.test/v1".to_string(),
+            auth_type: "apikey".to_string(),
+            auth_params_json: None,
+            action: None,
+            pool: "primary".to_string(),
+            wool_max_inflight: None,
+            wool_cooldown_until: None,
+            wool_failure_count: 0,
+            wool_last_preflight_at: None,
+            fast: true,
+            compatibility_mode: false,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+            last_test_at: None,
+            last_test_status: None,
+            last_test_error: None,
+        })
+        .expect("insert aggregate api");
+
+    let listed = storage.list_aggregate_apis().expect("list aggregate apis");
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].fast);
+
+    storage
+        .update_aggregate_api_fast("agg-fast", false)
+        .expect("update aggregate api fast");
+    let found = storage
+        .find_aggregate_api_by_id("agg-fast")
+        .expect("find aggregate api")
+        .expect("aggregate api exists");
+    assert!(!found.fast);
 }
 
 /// 函数 `token_upsert_keeps_refresh_schedule_columns`

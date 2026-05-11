@@ -33,6 +33,13 @@ export interface AggregateApi {
   authType: string;
   authParams: Record<string, unknown> | null;
   action: string | null;
+  pool: "primary" | "wool";
+  woolMaxInflight: number | null;
+  woolCooldownUntil: number | null;
+  woolFailureCount: number;
+  woolLastPreflightAt: number | null;
+  fast: boolean;
+  compatibilityMode: boolean;
   status: string;
   createdAt: number | null;
   updatedAt: number | null;
@@ -63,8 +70,54 @@ export interface AggregateApiTestResult {
   latencyMs: number;
 }
 
+export interface AggregateApiModelUsage {
+  aggregateApiUrl: string;
+  model: string;
+  requestCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+}
+
 export interface ApiKeyUsageStat {
   keyId: string;
+  totalTokens: number;
+  estimatedCostUsd: number;
+}
+
+export interface DashboardTokenUsage {
+  keyId: string | null;
+  keyName: string | null;
+  accountId: string | null;
+  accountLabel: string | null;
+  aggregateApiId: string | null;
+  aggregateApiSupplierName: string | null;
+  aggregateApiUrl: string | null;
+  model: string | null;
+  requestCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  lastUsedAt: number | null;
+}
+
+export interface DashboardDailyTokenUsageBucket {
+  dayStartTs: number;
+  sourceKey: string;
+  sourceLabel: string;
+  model: string | null;
+  billableInputTokens: number;
+  requestCount: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
   totalTokens: number;
   estimatedCostUsd: number;
 }

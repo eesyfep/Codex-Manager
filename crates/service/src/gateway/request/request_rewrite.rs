@@ -38,6 +38,38 @@ pub(super) fn compute_upstream_url(base: &str, path: &str) -> (String, Option<St
     (url, url_alt)
 }
 
+pub(in crate::gateway) fn rewrite_responses_body_to_chat_completions(
+    body: &bytes::Bytes,
+    upstream_stream: bool,
+) -> Result<bytes::Bytes, String> {
+    if body.is_empty() {
+        return Ok(body.clone());
+    }
+    let mut payload = serde_json::from_slice::<Value>(body.as_ref())
+        .map_err(|err| format!("解析 Responses 请求失败: {err}"))?;
+    let Some(obj) = payload.as_object_mut() else {
+        return Err("Responses 请求体必须是 JSON object".to_string());
+    };
+
+    chat_completions::normalize_responses_payload("/v1/chat/completions", obj);
+    if let Some(max_output_tokens) = obj.remove("max_output_tokens") {
+        obj.entry("max_completion_tokens".to_string())
+            .or_insert(max_output_tokens);
+    }
+    obj.insert("stream".to_string(), Value::Bool(upstream_stream));
+    chat_completions::ensure_reasoning_effort("/v1/chat/completions", obj);
+    chat_completions::ensure_stream_usage_override("/v1/chat/completions", obj);
+    obj.remove("include");
+    obj.remove("previous_response_id");
+    obj.remove("truncation");
+    obj.remove("store");
+    chat_completions::retain_official_fields("/v1/chat/completions", obj);
+
+    serde_json::to_vec(&payload)
+        .map(bytes::Bytes::from)
+        .map_err(|err| format!("序列化 Chat Completions 请求失败: {err}"))
+}
+
 /// 函数 `is_codex_backend_base`
 ///
 /// 作者: gaohongshun

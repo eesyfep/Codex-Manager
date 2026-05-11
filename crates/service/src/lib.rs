@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use codexmanager_core::rpc::types::{JsonRpcMessage, JsonRpcRequest};
 
 mod account;
@@ -10,6 +12,7 @@ mod errors;
 mod gateway;
 mod http;
 mod lifecycle;
+mod model_router;
 mod plugin;
 mod requestlog;
 mod rpc_dispatch;
@@ -30,8 +33,8 @@ pub(crate) use account::status as account_status;
 pub(crate) use account::update as account_update;
 pub(crate) use account::warmup as account_warmup;
 pub(crate) use aggregate_api::{
-    create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
-    test_aggregate_api_connection, update_aggregate_api,
+    aggregate_api_model_usage, create_aggregate_api, delete_aggregate_api, list_aggregate_apis,
+    read_aggregate_api_secret, test_aggregate_api_connection, update_aggregate_api,
 };
 pub(crate) use apikey::create as apikey_create;
 pub(crate) use apikey::delete as apikey_delete;
@@ -48,6 +51,28 @@ pub(crate) use auth::callback as auth_callback;
 pub(crate) use auth::login as auth_login;
 pub(crate) use auth::tokens as auth_tokens;
 pub(crate) use errors as error_codes;
+pub(crate) use model_router::{
+    add_manual_probe_model as model_router_add_manual_probe_model,
+    aggregate_api_models_response as model_router_aggregate_api_models_response,
+    apply_model_to_latest_workspace_session as model_router_apply_model_to_latest_workspace_session,
+    apply_probe_candidates as model_router_apply_probe_candidates,
+    apply_selected_probe_candidates as model_router_apply_selected_probe_candidates,
+    clear_session_subagent_model as model_router_clear_session_subagent_model,
+    delete_model_route_binding as model_router_delete_binding,
+    delete_workspace_default as model_router_delete_workspace_default,
+    import_codexmanager_data as model_router_import_codexmanager_data,
+    import_codexmanager_data_preserving_target as model_router_import_codexmanager_data_preserving_target,
+    list_model_route_bindings as model_router_list_bindings,
+    list_probe_runs as model_router_list_probe_runs,
+    list_session_models as model_router_list_sessions,
+    probe_aggregate_api_capabilities as model_router_probe_aggregate_api,
+    probe_all_aggregate_api_capabilities as model_router_probe_all_aggregate_api,
+    quick_check_model_route as model_router_quick_check,
+    save_model_route_binding as model_router_save_binding,
+    set_workspace_default as model_router_set_workspace_default,
+    update_session_model as model_router_update_session_model,
+    update_session_subagent_model as model_router_update_session_subagent_model,
+};
 pub(crate) use requestlog::clear as requestlog_clear;
 pub(crate) use requestlog::error_list as requestlog_error_list;
 pub(crate) use requestlog::list as requestlog_list;

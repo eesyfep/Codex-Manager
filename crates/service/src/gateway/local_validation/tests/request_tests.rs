@@ -4,7 +4,7 @@ use crate::gateway::{
 };
 use axum::http::{HeaderMap, HeaderValue};
 use codexmanager_core::rpc::types::{ModelInfo, ModelsResponse};
-use codexmanager_core::storage::Storage;
+use codexmanager_core::storage::{ConversationBinding, SessionModelMemory, Storage};
 use serde_json::Value;
 
 /// 函数 `sample_api_key`
@@ -217,6 +217,46 @@ fn sample_request_metadata(prompt_cache_key: Option<&str>) -> ParsedRequestMetad
     }
 }
 
+fn sample_session_model_memory(
+    thread_id: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+) -> SessionModelMemory {
+    SessionModelMemory {
+        thread_id: thread_id.to_string(),
+        workspace: "C:/repo".to_string(),
+        title: Some("thread".to_string()),
+        model: model.to_string(),
+        reasoning_effort: reasoning_effort.map(str::to_string),
+        source: "manual".to_string(),
+        locked: true,
+        last_seen_at: 1,
+        updated_at: 2,
+    }
+}
+
+fn sample_conversation_binding(conversation_id: &str, thread_anchor: &str) -> ConversationBinding {
+    ConversationBinding {
+        platform_key_hash: "hash".to_string(),
+        conversation_id: conversation_id.to_string(),
+        account_id: "acc_1".to_string(),
+        thread_epoch: 1,
+        thread_anchor: thread_anchor.to_string(),
+        status: "active".to_string(),
+        last_model: None,
+        last_switch_reason: None,
+        created_at: 1,
+        updated_at: 1,
+        last_used_at: 1,
+    }
+}
+
+fn open_initialized_storage() -> Storage {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    storage
+}
+
 fn sample_incoming_headers(
     conversation_id: Option<&str>,
     turn_state: Option<&str>,
@@ -363,6 +403,97 @@ fn preferred_client_prompt_cache_key_is_disabled_for_anthropic_native_requests()
     assert_eq!(actual, None);
 }
 
+#[test]
+fn session_request_override_uses_prompt_cache_key_thread_memory() {
+    let storage = open_initialized_storage();
+    storage
+        .upsert_session_model_memory(&sample_session_model_memory(
+            "019df900-31a7-71f0-a474-1ce26523c5f5",
+            "mimo-v2.5-pro",
+            Some("low"),
+        ))
+        .expect("insert session memory");
+    let request_meta = sample_request_metadata(Some("019df900-31a7-71f0-a474-1ce26523c5f5"));
+    let incoming_headers = sample_incoming_headers(None, None, None, None, None);
+
+    let actual =
+        resolve_session_request_override(&storage, &request_meta, &incoming_headers, None, None)
+            .expect("resolve override")
+            .expect("override");
+
+    assert_eq!(actual.thread_id, "019df900-31a7-71f0-a474-1ce26523c5f5");
+    assert_eq!(actual.model, "mimo-v2.5-pro");
+    assert_eq!(actual.reasoning_effort.as_deref(), Some("low"));
+}
+
+#[test]
+fn session_request_override_uses_conversation_binding_thread_anchor() {
+    let storage = open_initialized_storage();
+    storage
+        .upsert_session_model_memory(&sample_session_model_memory(
+            "thread-bound",
+            "glm-5.1",
+            None,
+        ))
+        .expect("insert session memory");
+    let request_meta = sample_request_metadata(None);
+    let incoming_headers = sample_incoming_headers(Some("conversation-1"), None, None, None, None);
+    let binding = sample_conversation_binding("conversation-1", "thread-bound");
+
+    let actual = resolve_session_request_override(
+        &storage,
+        &request_meta,
+        &incoming_headers,
+        Some("conversation-1"),
+        Some(&binding),
+    )
+    .expect("resolve override")
+    .expect("override");
+
+    assert_eq!(actual.thread_id, "thread-bound");
+    assert_eq!(actual.model, "glm-5.1");
+}
+
+#[test]
+fn session_override_wins_over_api_key_model_for_aggregate_passthrough() {
+    let api_key = sample_api_key(
+        crate::apikey_profile::PROTOCOL_OPENAI_COMPAT,
+        Some("gpt-5.4"),
+        Some("medium"),
+        None,
+    );
+    let session_override = SessionRequestOverride {
+        thread_id: "thread-1".to_string(),
+        model: "mimo-v2.5-pro".to_string(),
+        reasoning_effort: Some("low".to_string()),
+    };
+    let body = br#"{"model":"gpt-5.4","input":"hi"}"#.to_vec();
+
+    let (
+        rewritten_body,
+        model_for_log,
+        reasoning_for_log,
+        _service_tier_for_log,
+        _effective_service_tier_for_log,
+        _has_prompt_cache_key,
+        _request_shape,
+    ) = apply_passthrough_request_overrides(
+        "/v1/responses",
+        body,
+        &api_key,
+        Some(&session_override),
+        None,
+    );
+    let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
+
+    assert_eq!(
+        payload.get("model").and_then(Value::as_str),
+        Some("mimo-v2.5-pro")
+    );
+    assert_eq!(model_for_log.as_deref(), Some("mimo-v2.5-pro"));
+    assert_eq!(reasoning_for_log.as_deref(), Some("low"));
+}
+
 /// 函数 `aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_without_forcing_log_tier`
 ///
 /// 作者: gaohongshun
@@ -393,7 +524,7 @@ fn aggregate_passthrough_applies_model_reasoning_and_service_tier_overrides_with
         effective_service_tier_for_log,
         _has_prompt_cache_key,
         _request_shape,
-    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None);
+    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
     let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
 
     assert_eq!(
@@ -429,7 +560,7 @@ fn aggregate_passthrough_openai_responses_defaults_omitted_stream_to_sse() {
     let body = br#"{"model":"gpt-5.4","input":"hi"}"#.to_vec();
 
     let (rewritten_body, ..) =
-        apply_passthrough_request_overrides("/v1/responses", body, &api_key, None);
+        apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
     let defaulted_body = default_omitted_responses_stream_to_true(rewritten_body);
     let payload: Value = serde_json::from_slice(&defaulted_body).expect("json body");
     let is_stream = resolve_client_is_stream(
@@ -666,6 +797,7 @@ fn aggregate_passthrough_preserves_fast_service_tier_for_log_when_request_is_rew
         "/v1/responses",
         body,
         &api_key,
+        None,
         Some("fast".to_string()),
     );
     let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
@@ -699,7 +831,7 @@ fn codex_backend_passthrough_maps_fast_to_priority_but_keeps_fast_for_log() {
         effective_service_tier_for_log,
         _has_prompt_cache_key,
         _request_shape,
-    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None);
+    ) = apply_passthrough_request_overrides("/v1/responses", body, &api_key, None, None);
     let payload: Value = serde_json::from_slice(&rewritten_body).expect("json body");
     let request_meta = crate::gateway::parse_request_metadata(&rewritten_body);
 

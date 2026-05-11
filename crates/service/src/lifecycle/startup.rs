@@ -40,6 +40,9 @@ pub fn start_one_shot_server() -> std::io::Result<ServerHandle> {
     if let Err(err) = crate::storage_helpers::initialize_storage() {
         log::warn!("storage startup init skipped: {}", err);
     }
+    if let Err(err) = crate::apikey_models::ensure_codex_models_cache_seeded() {
+        log::warn!("codex models cache seed skipped: {}", err);
+    }
     crate::sync_runtime_settings_from_storage();
     let server = tiny_http::Server::http("127.0.0.1:0")
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
@@ -72,6 +75,22 @@ pub fn start_server(addr: &str) -> std::io::Result<()> {
     crate::gateway::reload_runtime_config_from_env();
     if let Err(err) = crate::storage_helpers::initialize_storage() {
         log::warn!("storage startup init skipped: {}", err);
+    }
+    if let Err(err) = crate::apikey_models::ensure_codex_models_cache_seeded() {
+        log::warn!("codex models cache seed skipped: {}", err);
+    }
+    if let Ok(source_path) = std::env::var("CODEXMANAGER_IMPORT_SOURCE_PATH") {
+        match crate::model_router::import_codexmanager_data_preserving_target(Some(source_path)) {
+            Ok(result) => log::info!(
+                "auto imported codexmanager data: accounts={} tokens={} aggregate_apis={} api_keys={} logs={}",
+                result.accounts,
+                result.tokens,
+                result.aggregate_apis,
+                result.api_keys,
+                result.request_logs
+            ),
+            Err(err) => log::warn!("auto import skipped: {}", err),
+        }
     }
     crate::sync_runtime_settings_from_storage();
     crate::usage_refresh::ensure_usage_polling();

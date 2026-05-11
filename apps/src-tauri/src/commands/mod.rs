@@ -2,6 +2,7 @@ pub mod account;
 pub mod aggregate_api;
 pub mod apikey;
 pub mod login;
+pub mod model_router;
 pub mod plugin;
 mod registry;
 pub mod requestlog;

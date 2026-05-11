@@ -1,7 +1,7 @@
 use codexmanager_core::rpc::types::{
     RequestLogListParams, RequestLogListResult, RequestLogSummary,
 };
-use codexmanager_core::storage::RequestLog;
+use codexmanager_core::storage::{RequestLog, SessionModelMemory};
 
 use crate::storage_helpers::open_storage;
 
@@ -22,7 +22,46 @@ const MAX_REQUEST_LOG_PAGE_SIZE: i64 = 500;
 fn normalize_upstream_url(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
+        .map(redact_sensitive_url_query_for_display)
+}
+
+fn redact_sensitive_url_query_for_display(value: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(value) else {
+        return value.to_string();
+    };
+    let query_pairs = url.query_pairs().into_owned().collect::<Vec<_>>();
+    if query_pairs.is_empty() {
+        return value.to_string();
+    }
+    url.set_query(None);
+    {
+        let mut query = url.query_pairs_mut();
+        for (name, raw_value) in query_pairs {
+            let normalized = name.trim().to_ascii_lowercase();
+            let redacted = matches!(
+                normalized.as_str(),
+                "key"
+                    | "api_key"
+                    | "apikey"
+                    | "api-key"
+                    | "x-api-key"
+                    | "access_token"
+                    | "token"
+                    | "secret"
+                    | "password"
+                    | "pass"
+            );
+            query.append_pair(
+                name.as_str(),
+                if redacted {
+                    "<redacted>"
+                } else {
+                    raw_value.as_str()
+                },
+            );
+        }
+    }
+    url.to_string()
 }
 
 fn derive_canonical_source(
@@ -100,7 +139,10 @@ pub(crate) fn read_request_logs(
     let logs = storage
         .list_request_logs(query.as_deref(), limit.unwrap_or(200))
         .map_err(|err| format!("list request logs failed: {err}"))?;
-    Ok(logs.into_iter().map(to_request_log_summary).collect())
+    Ok(logs
+        .into_iter()
+        .map(|item| to_request_log_summary(&storage, item))
+        .collect())
 }
 
 /// 函数 `read_request_log_page`
@@ -140,7 +182,10 @@ pub(crate) fn read_request_log_page(
         .map_err(|err| format!("list request logs failed: {err}"))?;
 
     Ok(RequestLogListResult {
-        items: logs.into_iter().map(to_request_log_summary).collect(),
+        items: logs
+            .into_iter()
+            .map(|item| to_request_log_summary(&storage, item))
+            .collect(),
         total,
         page,
         page_size,
@@ -255,7 +300,90 @@ fn clamp_page(page: i64, total: i64, page_size: i64) -> i64 {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn to_request_log_summary(item: RequestLog) -> RequestLogSummary {
+fn resolve_request_log_session_summary(
+    storage: &codexmanager_core::storage::Storage,
+    key_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let Some(conversation_id) = conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (None, None, None);
+    };
+    if let Some(platform_key_hash) = key_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|key_id| storage.find_api_key_by_id(key_id).ok().flatten())
+        .map(|api_key| api_key.key_hash)
+    {
+        if let Ok(Some(binding)) =
+            storage.get_conversation_binding(platform_key_hash.as_str(), conversation_id)
+        {
+            if let Ok(Some(session)) =
+                storage.find_session_model_memory(binding.thread_anchor.as_str())
+            {
+                return (
+                    Some(session.thread_id),
+                    session.title,
+                    Some(session.workspace),
+                );
+            }
+            return (
+                Some(binding.thread_anchor),
+                Some(binding.conversation_id),
+                storage
+                    .find_account_by_id(binding.account_id.as_str())
+                    .ok()
+                    .flatten()
+                    .and_then(|account| account.workspace_id),
+            );
+        }
+    }
+    if let Ok(bindings) = storage.list_recent_conversation_bindings(200) {
+        if let Some(binding) = bindings
+            .into_iter()
+            .find(|item| item.conversation_id == conversation_id)
+        {
+            if let Ok(Some(session)) =
+                storage.find_session_model_memory(binding.thread_anchor.as_str())
+            {
+                return (
+                    Some(session.thread_id),
+                    session.title,
+                    Some(session.workspace),
+                );
+            }
+            return (
+                Some(binding.thread_anchor),
+                Some(binding.conversation_id),
+                storage
+                    .find_account_by_id(binding.account_id.as_str())
+                    .ok()
+                    .flatten()
+                    .and_then(|account| account.workspace_id),
+            );
+        }
+    }
+    let session = storage
+        .find_session_model_memory(conversation_id)
+        .ok()
+        .flatten();
+    match session {
+        Some(SessionModelMemory {
+            thread_id,
+            workspace,
+            title,
+            ..
+        }) => (Some(thread_id), title, Some(workspace)),
+        None => (Some(conversation_id.to_string()), None, None),
+    }
+}
+
+fn to_request_log_summary(
+    storage: &codexmanager_core::storage::Storage,
+    item: RequestLog,
+) -> RequestLogSummary {
     let attempted_account_ids = item
         .attempted_account_ids_json
         .as_deref()
@@ -273,10 +401,16 @@ fn to_request_log_summary(item: RequestLog) -> RequestLogSummary {
         &attempted_aggregate_api_ids,
     );
     let size_reject_stage = derive_size_reject_stage(item.status_code, item.error.as_deref());
+    let (session_id, session_title, project_name) = resolve_request_log_session_summary(
+        storage,
+        item.key_id.as_deref(),
+        item.conversation_id.as_deref(),
+    );
     RequestLogSummary {
         trace_id: item.trace_id,
         key_id: item.key_id,
         account_id: item.account_id,
+        conversation_id: item.conversation_id.clone(),
         initial_account_id: item.initial_account_id,
         attempted_account_ids,
         initial_aggregate_api_id: item.initial_aggregate_api_id,
@@ -310,6 +444,9 @@ fn to_request_log_summary(item: RequestLog) -> RequestLogSummary {
         estimated_cost_usd: item.estimated_cost_usd,
         error: item.error,
         created_at: item.created_at,
+        session_id,
+        session_title,
+        project_name,
     }
 }
 
@@ -406,6 +543,18 @@ mod tests {
             normalize_upstream_url(Some(" https://api.openai.com/v1/responses ")).as_deref(),
             Some("https://api.openai.com/v1/responses")
         );
+    }
+
+    #[test]
+    fn normalize_upstream_url_redacts_sensitive_query_values() {
+        let normalized = normalize_upstream_url(Some(
+            "https://api.freemodel.dev/v1/responses?key=sk-secret&api-version=2024-10-21",
+        ))
+        .expect("normalized url");
+
+        assert!(normalized.contains("key=%3Credacted%3E"));
+        assert!(normalized.contains("api-version=2024-10-21"));
+        assert!(!normalized.contains("sk-secret"));
     }
 
     #[test]

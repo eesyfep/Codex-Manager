@@ -36,6 +36,7 @@
 *.log
 *.db
 *.sqlite
+/.qa/
 codexmanager.rpc-token
 codex resume*.txt
 .tmp_stage_ps/

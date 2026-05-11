@@ -13,6 +13,7 @@ mod aggregate_api;
 mod apikey;
 mod app_settings;
 mod gateway;
+mod model_router;
 mod requestlog;
 mod service_config;
 mod startup;
@@ -185,6 +186,9 @@ pub(super) fn value_or_error<T: Serialize>(result: Result<T, String>) -> Value {
 pub(crate) fn handle_request(req: JsonRpcRequest) -> JsonRpcMessage {
     if req.method == "initialize" {
         let _ = storage_helpers::initialize_storage();
+        if let Err(err) = crate::apikey_models::ensure_codex_models_cache_seeded() {
+            log::warn!("codex models cache seed skipped during initialize: {}", err);
+        }
         if let Some(storage) = storage_helpers::open_storage() {
             let _ = storage.insert_event(&Event {
                 account_id: None,
@@ -225,6 +229,9 @@ pub(crate) fn handle_request(req: JsonRpcRequest) -> JsonRpcMessage {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = gateway::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = model_router::try_handle(&req) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = crate::plugin::try_handle(&req) {

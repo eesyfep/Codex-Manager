@@ -209,6 +209,36 @@ fn balanced_round_robin_rotates_start_by_key_and_model() {
     reload_from_env();
 }
 
+#[test]
+fn reset_route_state_restarts_balanced_round_robin() {
+    let _guard = crate::test_env_guard();
+    let previous = std::env::var(ROUTE_STRATEGY_ENV).ok();
+    std::env::set_var(ROUTE_STRATEGY_ENV, "balanced");
+    reload_from_env();
+    clear_route_state_for_tests();
+
+    let mut first = candidate_list();
+    apply_route_strategy(&mut first, "gk_1", Some("gpt-5.3-codex"));
+    assert_eq!(account_ids(&first)[0], "acc-a");
+
+    let mut second = candidate_list();
+    apply_route_strategy(&mut second, "gk_1", Some("gpt-5.3-codex"));
+    assert_eq!(account_ids(&second)[0], "acc-b");
+
+    reset_route_state();
+
+    let mut after_reset = candidate_list();
+    apply_route_strategy(&mut after_reset, "gk_1", Some("gpt-5.3-codex"));
+    assert_eq!(account_ids(&after_reset)[0], "acc-a");
+
+    if let Some(value) = previous {
+        std::env::set_var(ROUTE_STRATEGY_ENV, value);
+    } else {
+        std::env::remove_var(ROUTE_STRATEGY_ENV);
+    }
+    reload_from_env();
+}
+
 /// 函数 `balanced_round_robin_isolated_by_key_and_model`
 ///
 /// 作者: gaohongshun

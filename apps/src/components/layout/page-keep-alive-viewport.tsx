@@ -28,6 +28,7 @@ const LAZY_PAGE_COMPONENTS: Record<
 > = {
   "/accounts": lazy(() => import("@/app/accounts/page")),
   "/aggregate-api": lazy(() => import("@/app/aggregate-api/page")),
+  "/model-router": lazy(() => import("@/app/model-router/page")),
   "/apikeys": lazy(() => import("@/app/apikeys/page")),
   "/models": lazy(() => import("@/app/models/page")),
   "/plugins": lazy(() => import("@/app/plugins/page")),

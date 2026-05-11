@@ -5,7 +5,7 @@ use crate::apikey_profile::{
 use crate::gateway::request_helpers::ParsedRequestMetadata;
 use base64::Engine;
 use bytes::Bytes;
-use codexmanager_core::storage::ApiKey;
+use codexmanager_core::storage::{ApiKey, ConversationBinding, Storage};
 use reqwest::Method;
 use tiny_http::Request;
 
@@ -55,6 +55,109 @@ fn resolve_effective_request_overrides(
         normalized_reasoning,
         normalized_service_tier,
     )
+}
+
+#[derive(Debug, Clone)]
+struct SessionRequestOverride {
+    thread_id: String,
+    model: String,
+    reasoning_effort: Option<String>,
+}
+
+fn normalized_anchor(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn push_unique_anchor(candidates: &mut Vec<String>, value: Option<&str>) {
+    let Some(value) = normalized_anchor(value) else {
+        return;
+    };
+    if !candidates.iter().any(|item| item == &value) {
+        candidates.push(value);
+    }
+}
+
+fn resolve_session_request_override(
+    storage: &Storage,
+    request_meta: &ParsedRequestMetadata,
+    incoming_headers: &super::super::IncomingHeaderSnapshot,
+    local_conversation_id: Option<&str>,
+    conversation_binding: Option<&ConversationBinding>,
+) -> Result<Option<SessionRequestOverride>, String> {
+    let mut candidates = Vec::new();
+    push_unique_anchor(&mut candidates, request_meta.prompt_cache_key.as_deref());
+    push_unique_anchor(
+        &mut candidates,
+        conversation_binding.map(|binding| binding.thread_anchor.as_str()),
+    );
+    push_unique_anchor(&mut candidates, incoming_headers.conversation_id());
+    push_unique_anchor(&mut candidates, local_conversation_id);
+
+    for thread_id in candidates {
+        let Some(memory) = storage
+            .find_session_model_memory(thread_id.as_str())
+            .map_err(|err| format!("load session model memory failed: {err}"))?
+        else {
+            continue;
+        };
+        let model = memory.model.trim();
+        if model.is_empty() {
+            continue;
+        }
+        return Ok(Some(SessionRequestOverride {
+            thread_id,
+            model: model.to_string(),
+            reasoning_effort: memory.reasoning_effort,
+        }));
+    }
+
+    if let Some(parent_thread_id) = incoming_headers.parent_thread_id() {
+        if let Some(memory) = storage
+            .find_session_subagent_model_memory(parent_thread_id)
+            .map_err(|err| format!("load subagent session model memory failed: {err}"))?
+        {
+            let model = memory.model.trim();
+            if !model.is_empty() {
+                return Ok(Some(SessionRequestOverride {
+                    thread_id: parent_thread_id.to_string(),
+                    model: model.to_string(),
+                    reasoning_effort: memory.reasoning_effort,
+                }));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn resolve_effective_request_overrides_with_session(
+    api_key: &ApiKey,
+    session_override: Option<&SessionRequestOverride>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let (api_model, api_reasoning, service_tier) = resolve_effective_request_overrides(api_key);
+    let model = session_override
+        .map(|override_| override_.model.clone())
+        .or(api_model);
+    let reasoning = session_override
+        .and_then(|override_| override_.reasoning_effort.clone())
+        .or(api_reasoning);
+
+    (model, reasoning, service_tier)
+}
+
+fn log_session_request_override(trace_id: &str, session_override: Option<&SessionRequestOverride>) {
+    let Some(session_override) = session_override else {
+        return;
+    };
+    log::info!(
+        "event=gateway_session_model_override trace_id={} thread_id={} model={}",
+        trace_id,
+        session_override.thread_id,
+        session_override.model
+    );
 }
 
 fn is_removed_openai_compat_request_path(normalized_path: &str) -> bool {
@@ -1162,6 +1265,7 @@ fn apply_passthrough_request_overrides(
     path: &str,
     body: Vec<u8>,
     api_key: &ApiKey,
+    session_override: Option<&SessionRequestOverride>,
     explicit_service_tier_for_log: Option<String>,
 ) -> (
     Vec<u8>,
@@ -1173,7 +1277,7 @@ fn apply_passthrough_request_overrides(
     Option<String>,
 ) {
     let (effective_model, effective_reasoning, effective_service_tier) =
-        resolve_effective_request_overrides(api_key);
+        resolve_effective_request_overrides_with_session(api_key, session_override);
     let rewritten_body =
         super::super::apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
             path,
@@ -1278,6 +1382,21 @@ pub(super) fn build_local_validation_result(
     )?;
 
     if api_key.rotation_strategy == ROTATION_AGGREGATE_API {
+        let conversation_binding = super::super::conversation_binding::load_conversation_binding(
+            &storage,
+            api_key.key_hash.as_str(),
+            initial_local_conversation_id.as_deref(),
+        )
+        .map_err(|err| LocalValidationError::new(500, err))?;
+        let session_override = resolve_session_request_override(
+            &storage,
+            &initial_request_meta,
+            &incoming_headers,
+            initial_local_conversation_id.as_deref(),
+            conversation_binding.as_ref(),
+        )
+        .map_err(|err| LocalValidationError::new(500, err))?;
+        log_session_request_override(trace_id.as_str(), session_override.as_ref());
         let (
             mut rewritten_body,
             model_for_log,
@@ -1290,6 +1409,7 @@ pub(super) fn build_local_validation_result(
             &normalized_path,
             body,
             &api_key,
+            session_override.as_ref(),
             initial_request_meta.service_tier.clone(),
         );
         if is_non_native_openai_responses_api_request(
@@ -1303,6 +1423,11 @@ pub(super) fn build_local_validation_result(
             .map_err(|err| LocalValidationError::new(400, err.message()))?;
         let incoming_headers = incoming_headers
             .with_conversation_id_override(initial_local_conversation_id.as_deref());
+        let log_conversation_id = incoming_headers
+            .conversation_id()
+            .map(str::to_string)
+            .or_else(|| initial_request_meta.prompt_cache_key.clone())
+            .or_else(|| initial_local_conversation_id.clone());
         let is_stream = resolve_client_is_stream(
             effective_protocol_type,
             normalized_path.as_str(),
@@ -1312,13 +1437,14 @@ pub(super) fn build_local_validation_result(
         );
         return Ok(LocalValidationResult {
             trace_id,
-            incoming_headers,
+            incoming_headers: incoming_headers.clone(),
             storage,
             original_path: normalized_path.clone(),
             path: normalized_path,
             body: Bytes::from(rewritten_body),
             is_stream,
             has_prompt_cache_key,
+            conversation_id: log_conversation_id,
             request_shape,
             protocol_type: effective_protocol_type.to_string(),
             rotation_strategy: ROTATION_AGGREGATE_API.to_string(),
@@ -1331,7 +1457,7 @@ pub(super) fn build_local_validation_result(
             key_id: api_key.id,
             platform_key_hash: api_key.key_hash,
             local_conversation_id: initial_local_conversation_id,
-            conversation_binding: None,
+            conversation_binding,
             model_for_log,
             reasoning_for_log,
             service_tier_for_log,
@@ -1341,7 +1467,7 @@ pub(super) fn build_local_validation_result(
     }
 
     let original_body = body.clone();
-    let (mut path, mut response_adapter, mut gemini_stream_output_mode, mut tool_name_restore_map) =
+    let (mut path, mut response_adapter, mut tool_name_restore_map) =
         if effective_protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
             && is_openai_images_generations_path(normalized_path.as_str())
             && !native_codex_client
@@ -1366,7 +1492,6 @@ pub(super) fn build_local_validation_result(
             (
                 "/v1/responses".to_string(),
                 response_adapter,
-                None,
                 super::super::ToolNameRestoreMap::default(),
             )
         } else if effective_protocol_type == crate::apikey_profile::PROTOCOL_OPENAI_COMPAT
@@ -1395,7 +1520,6 @@ pub(super) fn build_local_validation_result(
             (
                 "/v1/responses".to_string(),
                 response_adapter,
-                None,
                 super::super::ToolNameRestoreMap::default(),
             )
         } else {
@@ -1414,7 +1538,6 @@ pub(super) fn build_local_validation_result(
             (
                 adapted.path,
                 adapted.response_adapter,
-                adapted.gemini_stream_output_mode,
                 adapted.tool_name_restore_map,
             )
         };
@@ -1455,14 +1578,11 @@ pub(super) fn build_local_validation_result(
         path = normalized_path.clone();
         body = original_body;
         response_adapter = super::super::ResponseAdapter::Passthrough;
-        gemini_stream_output_mode = None;
         tool_name_restore_map.clear();
     }
     // 中文注释：下游调用方的 stream 语义必须来自原始客户端请求；
     // 否则协议适配（例如 Anthropic/Gemini 转 /responses 强制 stream=true）会污染响应模式判断。
     let client_request_meta = initial_request_meta.clone();
-    let (effective_model, effective_reasoning, effective_service_tier) =
-        resolve_effective_request_overrides(&api_key);
     let preferred_prompt_cache_key = resolve_preferred_client_prompt_cache_key(
         effective_protocol_type,
         &incoming_headers,
@@ -1481,6 +1601,15 @@ pub(super) fn build_local_validation_result(
         local_conversation_id.as_deref(),
     )
     .map_err(|err| LocalValidationError::new(500, err))?;
+    let session_override = resolve_session_request_override(
+        &storage,
+        &client_request_meta,
+        &incoming_headers,
+        local_conversation_id.as_deref(),
+        conversation_binding.as_ref(),
+    )
+    .map_err(|err| LocalValidationError::new(500, err))?;
+    log_session_request_override(trace_id.as_str(), session_override.as_ref());
     let effective_thread_anchor = super::super::resolve_fallback_thread_anchor(
         &incoming_headers,
         local_conversation_id.as_deref(),
@@ -1496,6 +1625,8 @@ pub(super) fn build_local_validation_result(
             normalized_path.as_str(),
             path.as_str(),
         );
+    let (effective_model, effective_reasoning, effective_service_tier) =
+        resolve_effective_request_overrides_with_session(&api_key, session_override.as_ref());
     body = if preferred_prompt_cache_key.is_some() {
         super::super::apply_request_overrides_with_service_tier_and_prompt_cache_key_scope(
             &path,
@@ -1545,6 +1676,11 @@ pub(super) fn build_local_validation_result(
         .or(api_key.reasoning_effort.clone());
     let service_tier_for_log = client_request_meta.service_tier;
     let effective_service_tier_for_log = request_meta.service_tier;
+    let log_conversation_id = incoming_headers
+        .conversation_id()
+        .map(str::to_string)
+        .or_else(|| request_meta.prompt_cache_key.clone())
+        .or_else(|| local_conversation_id.clone());
     let is_stream = resolve_client_is_stream(
         effective_protocol_type,
         normalized_path.as_str(),
@@ -1559,17 +1695,18 @@ pub(super) fn build_local_validation_result(
 
     Ok(LocalValidationResult {
         trace_id,
-        incoming_headers,
+        incoming_headers: incoming_headers.clone(),
         storage,
         original_path: normalized_path,
         path,
         body: Bytes::from(body),
         is_stream,
         has_prompt_cache_key,
+        conversation_id: log_conversation_id,
         request_shape,
         protocol_type: effective_protocol_type.to_string(),
         response_adapter,
-        gemini_stream_output_mode,
+        gemini_stream_output_mode: None,
         tool_name_restore_map,
         request_method,
         key_id: api_key.id,

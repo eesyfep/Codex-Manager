@@ -1,8 +1,10 @@
-use codexmanager_core::rpc::types::{AggregateApiListResult, JsonRpcRequest, JsonRpcResponse};
+use codexmanager_core::rpc::types::{
+    AggregateApiListResult, AggregateApiModelUsageListResult, JsonRpcRequest, JsonRpcResponse,
+};
 
 use crate::{
-    create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
-    test_aggregate_api_connection, update_aggregate_api,
+    aggregate_api_model_usage, create_aggregate_api, delete_aggregate_api, list_aggregate_apis,
+    read_aggregate_api_secret, test_aggregate_api_connection, update_aggregate_api,
 };
 
 /// 函数 `api_id_param`
@@ -36,6 +38,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
         "aggregateApi/list" => super::value_or_error(
             list_aggregate_apis().map(|items| AggregateApiListResult { items }),
         ),
+        "aggregateApi/modelUsage" => super::value_or_error(
+            aggregate_api_model_usage().map(|items| AggregateApiModelUsageListResult { items }),
+        ),
         "aggregateApi/create" => {
             let provider_type = super::string_param(req, "providerType");
             let supplier_name = super::string_param(req, "supplierName");
@@ -51,6 +56,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 .cloned();
             let action_custom_enabled = super::bool_param(req, "actionCustomEnabled");
             let action = super::string_param(req, "action");
+            let pool = super::string_param(req, "pool");
+            let wool_max_inflight = super::i64_param(req, "woolMaxInflight");
+            let fast = super::bool_param(req, "fast");
+            let compatibility_mode = super::bool_param(req, "compatibilityMode");
             let username = super::string_param(req, "username");
             let password = super::string_param(req, "password");
             super::value_or_error(create_aggregate_api(
@@ -64,6 +73,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 auth_params,
                 action_custom_enabled,
                 action,
+                pool,
+                wool_max_inflight,
+                fast,
+                compatibility_mode,
                 username,
                 password,
             ))
@@ -85,6 +98,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 .cloned();
             let action_custom_enabled = super::bool_param(req, "actionCustomEnabled");
             let action = super::string_param(req, "action");
+            let pool = super::string_param(req, "pool");
+            let wool_max_inflight = super::i64_param(req, "woolMaxInflight");
+            let fast = super::bool_param(req, "fast");
+            let compatibility_mode = super::bool_param(req, "compatibilityMode");
             let username = super::string_param(req, "username");
             let password = super::string_param(req, "password");
             super::ok_or_error(update_aggregate_api(
@@ -100,6 +117,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 auth_params,
                 action_custom_enabled,
                 action,
+                pool,
+                wool_max_inflight,
+                fast,
+                compatibility_mode,
                 username,
                 password,
             ))

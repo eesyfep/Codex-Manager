@@ -323,6 +323,27 @@ pub(in super::super) fn collect_response_output_text(value: &Value, output: &mut
             if let Some(text) = map.get("text").and_then(Value::as_str) {
                 append_output_text(output, text);
             }
+            if let Some(text) = map.get("content").and_then(Value::as_str) {
+                append_output_text(output, text);
+            }
+            if let Some(text) = map.get("reasoning_content").and_then(Value::as_str) {
+                append_output_text(output, text);
+            }
+            if let Some(text) = map.get("reasoning_text").and_then(Value::as_str) {
+                append_output_text(output, text);
+            }
+            if let Some(parts) = map.get("parts") {
+                collect_response_output_text(parts, output);
+            }
+            if let Some(delta_text) = map.get("delta_text").and_then(Value::as_str) {
+                append_output_text(output, delta_text);
+            }
+            if let Some(reasoning) = map.get("reasoning") {
+                collect_response_output_text(reasoning, output);
+            }
+            if let Some(reasoning_details) = map.get("reasoning_details") {
+                collect_response_output_text(reasoning_details, output);
+            }
             if let Some(content) = map.get("content") {
                 collect_response_output_text(content, output);
             }
@@ -331,6 +352,9 @@ pub(in super::super) fn collect_response_output_text(value: &Value, output: &mut
             }
             if let Some(output_field) = map.get("output") {
                 collect_response_output_text(output_field, output);
+            }
+            if let Some(choices) = map.get("choices") {
+                collect_response_output_text(choices, output);
             }
             if let Some(delta) = map.get("delta") {
                 collect_response_output_text(delta, output);
@@ -871,9 +895,9 @@ fn extract_object_string_field(raw: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_error_hint_from_body, limit_upstream_error_hint, output_text_limit_bytes,
-        reload_from_env, summarize_upstream_error_hint, UpstreamResponseBridgeResult,
-        UPSTREAM_ERROR_HINT_LIMIT_BYTES,
+        collect_response_output_text, extract_error_hint_from_body, limit_upstream_error_hint,
+        output_text_limit_bytes, reload_from_env, summarize_upstream_error_hint,
+        UpstreamResponseBridgeResult, UPSTREAM_ERROR_HINT_LIMIT_BYTES,
     };
 
     struct EnvGuard {
@@ -1108,5 +1132,43 @@ mod tests {
         reload_from_env();
 
         assert_eq!(output_text_limit_bytes(), 0);
+    }
+
+    #[test]
+    fn collect_response_output_text_supports_reasoning_content_shapes() {
+        let value = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_content": "先分析问题",
+                    "content": [
+                        { "type": "text", "text": "再给答案" }
+                    ]
+                }
+            }]
+        });
+
+        let mut output = String::new();
+        collect_response_output_text(&value, &mut output);
+
+        assert!(output.contains("先分析问题"));
+        assert!(output.contains("再给答案"));
+    }
+
+    #[test]
+    fn collect_response_output_text_supports_reasoning_details_arrays() {
+        let value = serde_json::json!({
+            "delta": {
+                "reasoning_details": [
+                    { "text": "第一步" },
+                    { "content": "第二步" }
+                ]
+            }
+        });
+
+        let mut output = String::new();
+        collect_response_output_text(&value, &mut output);
+
+        assert!(output.contains("第一步"));
+        assert!(output.contains("第二步"));
     }
 }

@@ -215,6 +215,7 @@ pub(super) fn finalize_upstream_response(
         Some(trace_id),
         model_for_log,
         started_at,
+        None,
     )?;
     let bridge_output_text_len = bridge
         .usage

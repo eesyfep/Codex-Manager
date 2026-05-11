@@ -1,8 +1,12 @@
+mod chat_to_responses_contract;
 pub(super) mod openai_responses_event;
 mod output_text;
 mod sse_aggregate;
 mod sse_frame;
 
+pub(super) use chat_to_responses_contract::{
+    chat_completion_response_value, lifecycle_sse_bytes, ChatToResponsesLifecycle,
+};
 pub(super) use output_text::append_output_text;
 pub(super) use output_text::{
     append_output_text_raw, collect_output_text_from_event_fields, collect_response_output_text,

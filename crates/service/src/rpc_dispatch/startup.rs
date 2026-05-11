@@ -1,6 +1,6 @@
 use codexmanager_core::rpc::types::{JsonRpcRequest, JsonRpcResponse};
 
-use crate::startup_snapshot;
+use crate::startup_snapshot::{self, StartupSnapshotOptions};
 
 /// 函数 `try_handle`
 ///
@@ -19,10 +19,17 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let request_log_limit = super::i64_param(req, "requestLogLimit");
             let day_start_ts = super::i64_param(req, "dayStartTs");
             let day_end_ts = super::i64_param(req, "dayEndTs");
+            let options = StartupSnapshotOptions {
+                include_api_models: super::bool_param(req, "includeApiModels").unwrap_or(true),
+                include_request_logs: super::bool_param(req, "includeRequestLogs").unwrap_or(true),
+                include_dashboard_usage: super::bool_param(req, "includeDashboardUsage")
+                    .unwrap_or(true),
+            };
             super::value_or_error(startup_snapshot::read_startup_snapshot(
                 request_log_limit,
                 day_start_ts,
                 day_end_ts,
+                options,
             ))
         }
         _ => return None,

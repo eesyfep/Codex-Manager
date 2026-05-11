@@ -11,10 +11,11 @@ use super::{
     collect_image_generation_chat_images, collect_non_stream_json_from_sse_bytes,
     extract_error_hint_from_body, extract_error_message_from_json, looks_like_sse_payload,
     merge_usage, parse_usage_from_json, push_trace_id_header, usage_has_signal, AnthropicSseReader,
-    ChatCompletionsFromResponsesSseReader, GeminiSseReader, ImagesFromResponsesSseReader,
-    ImagesResponseFormat, OpenAIResponsesPassthroughSseReader, PassthroughSseCollector,
-    PassthroughSseProtocol, PassthroughSseUsageReader, ResponsesFromChatCompletionsSseReader,
-    SseKeepAliveFrame, UpstreamResponseBridgeResult, UpstreamResponseUsage,
+    ChatCompletionsFromResponsesSseReader, ChatToResponsesLifecycle, GeminiSseReader,
+    ImagesFromResponsesSseReader, ImagesResponseFormat, OpenAIResponsesPassthroughSseReader,
+    PassthroughSseCollector, PassthroughSseProtocol, PassthroughSseUsageReader,
+    ResponsesFromChatCompletionsSseReader, SseKeepAliveFrame, UpstreamResponseBridgeResult,
+    UpstreamResponseUsage,
 };
 
 const REQUEST_ID_HEADER_CANDIDATES: &[&str] = &["x-request-id", "x-oai-request-id"];
@@ -630,6 +631,24 @@ fn replace_content_type_header(headers: &mut Vec<Header>, content_type: &str) {
     }
 }
 
+fn is_entity_header_invalid_after_body_rewrite(name: &str) -> bool {
+    name.eq_ignore_ascii_case("transfer-encoding")
+        || name.eq_ignore_ascii_case("content-length")
+        || name.eq_ignore_ascii_case("content-encoding")
+        || name.eq_ignore_ascii_case("content-md5")
+        || name.eq_ignore_ascii_case("digest")
+        || name.eq_ignore_ascii_case("connection")
+}
+
+fn push_rewritten_upstream_header(headers: &mut Vec<Header>, name: &str, value: &[u8]) {
+    if is_entity_header_invalid_after_body_rewrite(name) {
+        return;
+    }
+    if let Ok(header) = Header::from_bytes(name.as_bytes(), value) {
+        headers.push(header);
+    }
+}
+
 fn force_openai_responses_stream_content_type(
     headers: &mut Vec<Header>,
     request_path: &str,
@@ -671,6 +690,90 @@ fn convert_success_body_for_adapter(
         ResponseAdapter::GeminiSse | ResponseAdapter::GeminiCliSse => None,
         ResponseAdapter::Passthrough => None,
     }
+}
+
+fn convert_chat_completion_body_to_responses_sse(body: &[u8]) -> Option<Vec<u8>> {
+    let contract = ChatToResponsesLifecycle::from_chat_response_body(body)?;
+    super::lifecycle_sse_bytes(&contract)
+}
+
+fn empty_responses_lifecycle_sse(body: &[u8]) -> Vec<u8> {
+    let value = serde_json::from_slice::<Value>(body).unwrap_or_else(|_| json!({}));
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_codexmanager_chat_adapter");
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("gpt-5.4");
+    let created = value.get("created").and_then(Value::as_i64).unwrap_or(0);
+    let mut response = json!({
+        "id": id,
+        "object": "response",
+        "created": created,
+        "created_at": created,
+        "model": model,
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": ""
+            }]
+        }],
+        "output_text": ""
+    });
+    if let Some(raw_usage) = value.get("usage") {
+        response["usage"] = chat_usage_to_responses_usage_value(raw_usage);
+    }
+    let contract = ChatToResponsesLifecycle {
+        response_id: id.to_string(),
+        model: model.to_string(),
+        created_at: created,
+        item_id: format!("msg_{id}"),
+        output_text: String::new(),
+        response,
+    };
+    super::lifecycle_sse_bytes(&contract).unwrap_or_else(|| {
+        b"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output_text\":\"\",\"output\":[]}}\n\n".to_vec()
+    })
+}
+
+fn chat_usage_to_responses_usage_value(usage: &Value) -> Value {
+    let input_tokens = usage
+        .get("input_tokens")
+        .or_else(|| usage.get("prompt_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .or_else(|| usage.get("completion_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(input_tokens + output_tokens);
+    let mut mapped = json!({
+        "input_tokens": input_tokens.max(0),
+        "output_tokens": output_tokens.max(0),
+        "total_tokens": total_tokens.max(0)
+    });
+    if let Some(details) = usage
+        .get("input_tokens_details")
+        .or_else(|| usage.get("prompt_tokens_details"))
+    {
+        mapped["input_tokens_details"] = details.clone();
+    }
+    if let Some(details) = usage
+        .get("output_tokens_details")
+        .or_else(|| usage.get("completion_tokens_details"))
+    {
+        mapped["output_tokens_details"] = details.clone();
+    }
+    mapped
 }
 
 fn collect_chat_output_text(value: &Value, out: &mut String) {
@@ -1572,6 +1675,7 @@ pub(crate) fn respond_with_upstream(
     trace_id: Option<&str>,
     fallback_model: Option<&str>,
     request_started_at: std::time::Instant,
+    no_upstream_after_handshake_timeout: Option<std::time::Duration>,
 ) -> Result<UpstreamResponseBridgeResult, String> {
     let keepalive_frame = resolve_stream_keepalive_frame(response_adapter, request_path);
     let passthrough_sse_protocol =
@@ -1591,16 +1695,7 @@ pub(crate) fn respond_with_upstream(
         let status = StatusCode(upstream.status().as_u16());
         let mut headers = Vec::new();
         for (name, value) in upstream.headers().iter() {
-            let name_str = name.as_str();
-            if name_str.eq_ignore_ascii_case("transfer-encoding")
-                || name_str.eq_ignore_ascii_case("content-length")
-                || name_str.eq_ignore_ascii_case("connection")
-            {
-                continue;
-            }
-            if let Ok(header) = Header::from_bytes(name_str.as_bytes(), value.as_bytes()) {
-                headers.push(header);
-            }
+            push_rewritten_upstream_header(&mut headers, name.as_str(), value.as_bytes());
         }
         if let Some(trace_id) = trace_id {
             push_trace_id_header(&mut headers, trace_id);
@@ -2334,12 +2429,17 @@ pub(crate) fn respond_with_upstream(
                 let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
                 let response_body: Box<dyn std::io::Read + Send> =
                     if request_path.starts_with("/v1/responses") {
-                        Box::new(OpenAIResponsesPassthroughSseReader::new(
-                            upstream,
-                            Arc::clone(&usage_collector),
-                            keepalive_frame,
-                            request_started_at,
-                        ))
+                        Box::new(
+                            OpenAIResponsesPassthroughSseReader::new(
+                                upstream,
+                                Arc::clone(&usage_collector),
+                                keepalive_frame,
+                                request_started_at,
+                            )
+                            .with_no_upstream_after_handshake_timeout(
+                                no_upstream_after_handshake_timeout,
+                            ),
+                        )
                     } else {
                         Box::new(PassthroughSseUsageReader::new(
                             upstream,
@@ -2442,6 +2542,7 @@ pub(crate) fn respond_with_stream_upstream(
     trace_id: Option<&str>,
     fallback_model: Option<&str>,
     request_started_at: std::time::Instant,
+    no_upstream_after_handshake_timeout: Option<std::time::Duration>,
 ) -> Result<UpstreamResponseBridgeResult, String> {
     let keepalive_frame = resolve_stream_keepalive_frame(response_adapter, request_path);
     let upstream_request_id =
@@ -2459,16 +2560,7 @@ pub(crate) fn respond_with_stream_upstream(
         let status = StatusCode(upstream.status().as_u16());
         let mut headers = Vec::new();
         for (name, value) in upstream.headers().iter() {
-            let name_str = name.as_str();
-            if name_str.eq_ignore_ascii_case("transfer-encoding")
-                || name_str.eq_ignore_ascii_case("content-length")
-                || name_str.eq_ignore_ascii_case("connection")
-            {
-                continue;
-            }
-            if let Ok(header) = Header::from_bytes(name_str.as_bytes(), value.as_bytes()) {
-                headers.push(header);
-            }
+            push_rewritten_upstream_header(&mut headers, name.as_str(), value.as_bytes());
         }
         if let Some(trace_id) = trace_id {
             push_trace_id_header(&mut headers, trace_id);
@@ -3182,12 +3274,17 @@ pub(crate) fn respond_with_stream_upstream(
                 let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
                 let response_body: Box<dyn std::io::Read + Send> =
                     if request_path.starts_with("/v1/responses") {
-                        Box::new(OpenAIResponsesPassthroughSseReader::from_stream_response(
-                            upstream,
-                            Arc::clone(&usage_collector),
-                            keepalive_frame,
-                            request_started_at,
-                        ))
+                        Box::new(
+                            OpenAIResponsesPassthroughSseReader::from_stream_response(
+                                upstream,
+                                Arc::clone(&usage_collector),
+                                keepalive_frame,
+                                request_started_at,
+                            )
+                            .with_no_upstream_after_handshake_timeout(
+                                no_upstream_after_handshake_timeout,
+                            ),
+                        )
                     } else {
                         return Err(format!(
                             "stream upstream response is not supported for path {request_path}"
@@ -3321,10 +3418,12 @@ fn resolve_stream_keepalive_frame(
 mod tests {
     use super::{
         classify_compact_non_success_kind, compact_non_success_body_should_be_normalized,
-        convert_chat_completion_body_to_responses, convert_responses_body_to_chat_completions,
+        convert_chat_completion_body_to_responses, convert_chat_completion_body_to_responses_sse,
+        convert_responses_body_to_chat_completions,
         convert_responses_body_to_gemini_generate_content, convert_responses_body_to_images,
-        force_openai_responses_stream_content_type, gemini_cli_wrap_response_envelope, Header,
-        ImagesResponseFormat, ResponseAdapter,
+        empty_responses_lifecycle_sse, force_openai_responses_stream_content_type,
+        gemini_cli_wrap_response_envelope, is_entity_header_invalid_after_body_rewrite,
+        push_rewritten_upstream_header, Header, ImagesResponseFormat, ResponseAdapter,
     };
     use serde_json::json;
 
@@ -3415,6 +3514,58 @@ mod tests {
         assert!(headers
             .iter()
             .any(|header| header.field.as_str().as_str() == "x-request-id"));
+    }
+
+    #[test]
+    fn rewritten_response_headers_drop_stale_entity_headers() {
+        let mut headers = Vec::new();
+        push_rewritten_upstream_header(&mut headers, "content-encoding", b"br");
+        push_rewritten_upstream_header(&mut headers, "content-length", b"1234");
+        push_rewritten_upstream_header(&mut headers, "transfer-encoding", b"chunked");
+        push_rewritten_upstream_header(&mut headers, "x-request-id", b"req_test");
+
+        assert!(headers.iter().all(|header| {
+            let name = header.field.as_str().as_str();
+            !is_entity_header_invalid_after_body_rewrite(name)
+        }));
+        assert!(headers
+            .iter()
+            .any(|header| header.field.as_str().as_str() == "x-request-id"));
+    }
+
+    #[test]
+    fn empty_chat_completion_fallback_still_emits_responses_lifecycle() {
+        let body = json!({
+            "id": "chatcmpl_empty_fallback",
+            "created": 1775900301,
+            "model": "mimo-v2.5-pro",
+            "choices": [{
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "hidden reasoning"
+                }
+            }],
+            "usage": {
+                "prompt_tokens": 2,
+                "completion_tokens": 1,
+                "total_tokens": 3,
+                "completion_tokens_details": { "reasoning_tokens": 1 }
+            }
+        });
+
+        let sse = String::from_utf8(empty_responses_lifecycle_sse(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+        ))
+        .expect("utf8");
+
+        assert!(sse.contains("event: response.created"));
+        assert!(sse.contains("event: response.completed"));
+        assert!(!sse.contains("chat.completion.chunk"));
+        assert!(sse.contains("\"output_text\":\"\""));
+        assert!(sse.contains("\"output_tokens\":1"));
     }
 
     #[test]
@@ -3520,6 +3671,95 @@ mod tests {
         assert_eq!(value["usage"]["input_tokens"], 4);
         assert_eq!(value["usage"]["output_tokens"], 6);
         assert_eq!(value["usage"]["total_tokens"], 10);
+    }
+
+    #[test]
+    fn non_stream_chat_completion_response_builds_responses_sse_lifecycle() {
+        let body = json!({
+            "id": "chatcmpl_adapter_sse_1",
+            "created": 1775900101,
+            "model": "mimo-v2.5-pro",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello from non-stream chat"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 7,
+                "total_tokens": 12
+            }
+        });
+
+        let mapped = convert_chat_completion_body_to_responses_sse(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+        )
+        .expect("convert responses sse");
+        let text = String::from_utf8(mapped).expect("utf8");
+
+        for marker in [
+            "event: response.created",
+            "event: response.in_progress",
+            "event: response.output_item.added",
+            "event: response.content_part.added",
+            "event: response.output_text.delta",
+            "event: response.output_text.done",
+            "event: response.content_part.done",
+            "event: response.output_item.done",
+            "event: response.completed",
+        ] {
+            assert!(text.contains(marker), "missing {marker}");
+        }
+        assert!(text.contains("\"model\":\"mimo-v2.5-pro\""));
+        assert!(text.contains("\"output_text\":\"hello from non-stream chat\""));
+        assert!(text.contains("\"input_tokens\":5"));
+        assert!(text.contains("\"output_tokens\":7"));
+        assert!(text.contains("\"total_tokens\":12"));
+    }
+
+    #[test]
+    fn non_stream_chat_completion_tool_call_builds_responses_sse_lifecycle() {
+        let body = json!({
+            "id": "chatcmpl_adapter_tool_sse_1",
+            "created": 1775900102,
+            "model": "glm-5.1",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_read_file_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": "{\"path\":\"README.md\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {
+                "prompt_tokens": 6,
+                "completion_tokens": 4,
+                "total_tokens": 10
+            }
+        });
+
+        let mapped = convert_chat_completion_body_to_responses_sse(
+            serde_json::to_vec(&body).expect("body").as_slice(),
+        )
+        .expect("convert tool responses sse");
+        let text = String::from_utf8(mapped).expect("utf8");
+
+        assert!(text.contains("event: response.completed"));
+        assert!(text.contains("\"type\":\"function_call\""));
+        assert!(text.contains("\"call_id\":\"call_read_file_1\""));
+        assert!(text.contains("\"name\":\"read_file\""));
+        assert!(text.contains("\\\"path\\\":\\\"README.md\\\""));
+        assert!(text.contains("\"input_tokens\":6"));
+        assert!(text.contains("\"output_tokens\":4"));
     }
 
     fn non_stream_images_response_builds_b64_json_payload() {

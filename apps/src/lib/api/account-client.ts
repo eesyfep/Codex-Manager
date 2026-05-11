@@ -3,6 +3,7 @@ import {
   normalizeAccountList,
   normalizeAggregateApiCreateResult,
   normalizeAggregateApiList,
+  normalizeAggregateApiModelUsageList,
   normalizeAggregateApiSecretResult,
   normalizeAggregateApiTestResult,
   normalizeApiKeyCreateResult,
@@ -40,6 +41,7 @@ import {
   AccountUsage,
   AggregateApi,
   AggregateApiCreateResult,
+  AggregateApiModelUsage,
   AggregateApiSecretResult,
   AggregateApiTestResult,
   ApiKey,
@@ -125,6 +127,10 @@ interface AggregateApiPayload {
   authParams?: Record<string, unknown> | null;
   actionCustomEnabled?: boolean | null;
   action?: string | null;
+  pool?: "primary" | "wool" | string | null;
+  woolMaxInflight?: number | null;
+  fast?: boolean | null;
+  compatibilityMode?: boolean | null;
   username?: string | null;
   password?: string | null;
 }
@@ -452,6 +458,13 @@ export const accountClient = {
     const result = await invoke<unknown>("service_aggregate_api_list", withAddr());
     return normalizeAggregateApiList(result);
   },
+  async listAggregateApiModelUsage(): Promise<AggregateApiModelUsage[]> {
+    const result = await invoke<unknown>(
+      "service_aggregate_api_model_usage",
+      withAddr(),
+    );
+    return normalizeAggregateApiModelUsageList(result);
+  },
   async createAggregateApi(params: AggregateApiPayload): Promise<AggregateApiCreateResult> {
     const result = await invoke<unknown>(
       "service_aggregate_api_create",
@@ -473,6 +486,14 @@ export const accountClient = {
             ? params.actionCustomEnabled
             : null,
         action: params.action || null,
+        pool: params.pool || null,
+        woolMaxInflight:
+          typeof params.woolMaxInflight === "number" ? params.woolMaxInflight : null,
+        fast: typeof params.fast === "boolean" ? params.fast : null,
+        compatibilityMode:
+          typeof params.compatibilityMode === "boolean"
+            ? params.compatibilityMode
+            : null,
         username: params.username || null,
         password: params.password || null,
       })
@@ -501,6 +522,14 @@ export const accountClient = {
             ? params.actionCustomEnabled
             : null,
         action: params.action || null,
+        pool: params.pool || null,
+        woolMaxInflight:
+          typeof params.woolMaxInflight === "number" ? params.woolMaxInflight : null,
+        fast: typeof params.fast === "boolean" ? params.fast : null,
+        compatibilityMode:
+          typeof params.compatibilityMode === "boolean"
+            ? params.compatibilityMode
+            : null,
         username: params.username || null,
         password: params.password || null,
       })

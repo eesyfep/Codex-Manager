@@ -214,6 +214,50 @@ pub(crate) fn db_dir() -> PathBuf {
         .unwrap_or_else(exe_dir)
 }
 
+/// 函数 `resolve_codex_home_dir`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-05-07
+///
+/// # 参数
+/// 无
+///
+/// # 返回
+/// 返回函数执行结果
+pub(crate) fn resolve_codex_home_dir() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var("CODEX_HOME") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    std::env::var("USERPROFILE")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".codex"))
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| PathBuf::from(home).join(".codex"))
+        })
+}
+
+/// 函数 `resolve_models_cache_path`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-05-07
+///
+/// # 参数
+/// 无
+///
+/// # 返回
+/// 返回函数执行结果
+pub(crate) fn resolve_models_cache_path() -> Option<PathBuf> {
+    resolve_codex_home_dir().map(|home| home.join("models_cache.json"))
+}
+
 /// 函数 `rpc_token_file_path`
 ///
 /// 作者: gaohongshun

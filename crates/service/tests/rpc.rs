@@ -1,6 +1,7 @@
 use codexmanager_core::rpc::types::JsonRpcRequest;
 use codexmanager_core::storage::{
-    now_ts, Account, Event, RequestLog, RequestTokenStat, Storage, Token, UsageSnapshotRecord,
+    now_ts, Account, ConversationBinding, Event, RequestLog, RequestTokenStat, SessionModelMemory,
+    Storage, Token, UsageSnapshotRecord,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -2237,6 +2238,129 @@ fn rpc_requestlog_list_and_summary_support_pagination() {
             .get("totalTokens")
             .and_then(|value| value.as_i64()),
         Some(45)
+    );
+}
+
+#[test]
+fn rpc_requestlog_list_resolves_project_session_from_conversation_binding() {
+    let ctx = RpcTestContext::new("rpc-requestlog-session-summary");
+    let storage = Storage::open(ctx.db_path()).expect("open db");
+    storage.init().expect("init schema");
+    let now = now_ts();
+    storage
+        .insert_account(&Account {
+            id: "acc-session".to_string(),
+            label: "session account".to_string(),
+            issuer: "codex".to_string(),
+            chatgpt_account_id: None,
+            workspace_id: Some("C:/work/project-alpha".to_string()),
+            group_name: None,
+            sort: 0,
+            status: "active".to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .expect("insert account");
+    storage
+        .insert_api_key(&codexmanager_core::storage::ApiKey {
+            id: "gk-session".to_string(),
+            name: Some("session key".to_string()),
+            model_slug: Some("gpt-5.5".to_string()),
+            reasoning_effort: Some("low".to_string()),
+            service_tier: None,
+            rotation_strategy: "account_rotation".to_string(),
+            aggregate_api_id: None,
+            account_plan_filter: None,
+            aggregate_api_url: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "authorization_bearer".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: "platform-hash".to_string(),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert api key");
+    storage
+        .upsert_conversation_binding(&ConversationBinding {
+            platform_key_hash: "platform-hash".to_string(),
+            conversation_id: "conv-runtime-1".to_string(),
+            account_id: "acc-session".to_string(),
+            thread_epoch: 1,
+            thread_anchor: "thread-real-1".to_string(),
+            status: "active".to_string(),
+            last_model: Some("gpt-5.5".to_string()),
+            last_switch_reason: None,
+            created_at: now,
+            updated_at: now,
+            last_used_at: now,
+        })
+        .expect("insert binding");
+    storage
+        .upsert_session_model_memory(&SessionModelMemory {
+            thread_id: "thread-real-1".to_string(),
+            workspace: "C:/work/project-alpha".to_string(),
+            title: Some("真实会话标题".to_string()),
+            model: "gpt-5.5".to_string(),
+            reasoning_effort: Some("low".to_string()),
+            source: "manual".to_string(),
+            locked: false,
+            last_seen_at: now,
+            updated_at: now,
+        })
+        .expect("insert session memory");
+    storage
+        .insert_request_log(&RequestLog {
+            trace_id: Some("trc-session-summary".to_string()),
+            key_id: Some("gk-session".to_string()),
+            account_id: Some("acc-session".to_string()),
+            conversation_id: Some("conv-runtime-1".to_string()),
+            request_path: "/v1/responses".to_string(),
+            original_path: Some("/v1/responses".to_string()),
+            adapted_path: Some("/v1/chat/completions".to_string()),
+            method: "POST".to_string(),
+            model: Some("gpt-5.5".to_string()),
+            response_adapter: Some("ResponsesFromChatCompletions".to_string()),
+            upstream_url: Some("https://api.freemodel.dev/v1/chat/completions".to_string()),
+            status_code: Some(200),
+            created_at: now,
+            ..Default::default()
+        })
+        .expect("insert request log");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let list_req = JsonRpcRequest {
+        id: 74.into(),
+        method: "requestlog/list".to_string(),
+        params: Some(serde_json::json!({
+            "page": 1,
+            "pageSize": 20,
+            "query": "trace:=trc-session-summary"
+        })),
+        trace: None,
+    };
+    let list_json = serde_json::to_string(&list_req).expect("serialize requestlog list");
+    let list_resp = post_rpc(&server.addr, &list_json);
+    let item = list_resp
+        .get("result")
+        .and_then(|value| value.get("items"))
+        .and_then(|value| value.as_array())
+        .and_then(|items| items.first())
+        .expect("requestlog item");
+
+    assert_eq!(
+        item.get("sessionId").and_then(|value| value.as_str()),
+        Some("thread-real-1")
+    );
+    assert_eq!(
+        item.get("sessionTitle").and_then(|value| value.as_str()),
+        Some("真实会话标题")
+    );
+    assert_eq!(
+        item.get("projectName").and_then(|value| value.as_str()),
+        Some("C:/work/project-alpha")
     );
 }
 

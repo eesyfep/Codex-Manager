@@ -3,6 +3,7 @@ export interface RequestLog {
   traceId: string;
   keyId: string;
   accountId: string;
+  conversationId: string | null;
   initialAccountId: string;
   attemptedAccountIds: string[];
   initialAggregateApiId: string;
@@ -13,6 +14,9 @@ export interface RequestLog {
   method: string;
   requestType: string;
   path: string;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  projectName: string | null;
   model: string;
   reasoningEffort: string;
   serviceTier: string;

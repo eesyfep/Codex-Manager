@@ -1,4 +1,4 @@
-use super::{RequestLog, RequestTokenStat, Storage};
+use super::{super::AggregateApi, RequestLog, RequestTokenStat, Storage};
 
 /// 函数 `collect_query_plan_details`
 ///
@@ -178,6 +178,85 @@ fn insert_request_log_with_token_stat_is_visible_via_join() {
     assert_eq!(row.total_tokens, Some(12));
     assert_eq!(row.reasoning_output_tokens, Some(3));
     assert_eq!(row.estimated_cost_usd, Some(0.123));
+}
+
+/// 函数 `init_repairs_request_logs_query_columns_after_recorded_migration`
+///
+/// 作者: gaohongshun
+///
+/// 时间: 2026-05-09
+///
+/// # 参数
+/// 无
+///
+/// # 返回
+/// 无
+#[test]
+fn init_repairs_request_logs_query_columns_after_recorded_migration() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage
+        .ensure_migrations_table()
+        .expect("ensure migrations");
+    storage
+        .conn
+        .execute_batch(
+            "CREATE TABLE request_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id TEXT,
+                key_id TEXT,
+                account_id TEXT,
+                request_path TEXT NOT NULL,
+                method TEXT NOT NULL,
+                model TEXT,
+                reasoning_effort TEXT,
+                upstream_url TEXT,
+                status_code INTEGER,
+                error TEXT,
+                created_at INTEGER NOT NULL
+             );
+             INSERT INTO schema_migrations (version, applied_at)
+             VALUES ('028_request_logs_drop_legacy_usage_columns', 1);",
+        )
+        .expect("seed old request logs schema");
+
+    storage.init().expect("init repairs old schema");
+
+    let logs = storage
+        .list_request_logs(None, 10)
+        .expect("list request logs after repair");
+    assert!(logs.is_empty());
+
+    let present_query_columns: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1)
+             FROM pragma_table_info('request_logs')
+             WHERE name IN (
+                'trace_id',
+                'original_path',
+                'adapted_path',
+                'response_adapter',
+                'conversation_id',
+                'initial_account_id',
+                'attempted_account_ids_json',
+                'initial_aggregate_api_id',
+                'attempted_aggregate_api_ids_json',
+                'aggregate_api_supplier_name',
+                'aggregate_api_url',
+                'duration_ms',
+                'first_response_ms',
+                'request_type',
+                'gateway_mode',
+                'transparent_mode',
+                'enhanced_mode',
+                'service_tier',
+                'effective_service_tier'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .expect("query columns");
+    assert_eq!(present_query_columns, 19);
 }
 
 /// 函数 `token_stat_failure_still_commits_request_log`
@@ -422,6 +501,97 @@ fn request_logs_filtered_summary_aggregates_counts_and_tokens() {
     assert_eq!(summary.error_count, 1);
     assert_eq!(summary.total_tokens, 150);
     assert_eq!(summary.estimated_cost_usd, 0.03);
+}
+
+#[test]
+fn dashboard_token_usage_resolves_aggregate_api_url_from_binding() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    storage
+        .insert_aggregate_api(&AggregateApi {
+            id: "agg-dashboard".to_string(),
+            provider_type: "openai".to_string(),
+            supplier_name: Some("Dashboard API".to_string()),
+            sort: 0,
+            url: "https://example.test/v1".to_string(),
+            auth_type: "apikey".to_string(),
+            auth_params_json: None,
+            action: None,
+            pool: "primary".to_string(),
+            wool_max_inflight: None,
+            wool_cooldown_until: None,
+            wool_failure_count: 0,
+            wool_last_preflight_at: None,
+            fast: false,
+            compatibility_mode: false,
+            status: "active".to_string(),
+            created_at: 1,
+            updated_at: 1,
+            last_test_at: None,
+            last_test_status: None,
+            last_test_error: None,
+        })
+        .expect("insert aggregate api");
+    storage
+        .conn
+        .execute(
+            "INSERT INTO api_keys (
+                id, name, key_hash, status, created_at, aggregate_api_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            (
+                "key-dashboard",
+                "Dashboard Key",
+                "hash-dashboard",
+                "active",
+                1_i64,
+                "agg-dashboard",
+            ),
+        )
+        .expect("insert api key");
+
+    let request_log_id = storage
+        .insert_request_log(&RequestLog {
+            key_id: Some("key-dashboard".to_string()),
+            request_path: "/v1/responses".to_string(),
+            method: "POST".to_string(),
+            model: Some("glm-5.1".to_string()),
+            status_code: Some(200),
+            created_at: 10,
+            ..Default::default()
+        })
+        .expect("insert request log");
+    storage
+        .insert_request_token_stat(&RequestTokenStat {
+            request_log_id,
+            key_id: Some("key-dashboard".to_string()),
+            model: Some("glm-5.1".to_string()),
+            total_tokens: Some(123),
+            estimated_cost_usd: Some(0.25),
+            created_at: 10,
+            ..Default::default()
+        })
+        .expect("insert token stat");
+
+    let usage = storage
+        .summarize_dashboard_token_usage(Some(0), Some(100), 10)
+        .expect("summarize dashboard token usage");
+    assert_eq!(usage.len(), 1);
+    assert_eq!(usage[0].aggregate_api_id.as_deref(), Some("agg-dashboard"));
+    assert_eq!(
+        usage[0].aggregate_api_supplier_name.as_deref(),
+        Some("Dashboard API")
+    );
+    assert_eq!(
+        usage[0].aggregate_api_url.as_deref(),
+        Some("https://example.test/v1")
+    );
+
+    let daily = storage
+        .summarize_dashboard_daily_token_usage(0, 100, 5)
+        .expect("summarize daily dashboard token usage");
+    assert_eq!(daily.len(), 1);
+    assert_eq!(daily[0].source_key, "https://example.test/v1");
+    assert_eq!(daily[0].source_label, "Dashboard API");
 }
 
 #[test]

@@ -12,6 +12,7 @@ mod conversation_bindings;
 mod events;
 mod gateway_error_logs;
 mod model_options;
+mod model_router;
 mod plugins;
 mod request_log_query;
 mod request_logs;
@@ -118,6 +119,7 @@ pub struct RequestLog {
     pub trace_id: Option<String>,
     pub key_id: Option<String>,
     pub account_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub initial_account_id: Option<String>,
     pub attempted_account_ids_json: Option<String>,
     pub initial_aggregate_api_id: Option<String>,
@@ -185,6 +187,19 @@ pub struct RequestLogQuerySummary {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct AggregateApiModelUsageSummary {
+    pub aggregate_api_url: String,
+    pub model: String,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct GatewayErrorLog {
     pub trace_id: Option<String>,
     pub key_id: Option<String>,
@@ -205,6 +220,42 @@ pub struct GatewayErrorLog {
 #[derive(Debug, Clone)]
 pub struct ApiKeyTokenUsageSummary {
     pub key_id: String,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DashboardTokenUsageSummary {
+    pub key_id: Option<String>,
+    pub key_name: Option<String>,
+    pub account_id: Option<String>,
+    pub account_label: Option<String>,
+    pub aggregate_api_id: Option<String>,
+    pub aggregate_api_supplier_name: Option<String>,
+    pub aggregate_api_url: Option<String>,
+    pub model: Option<String>,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+    pub last_used_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DashboardDailyTokenUsageBucket {
+    pub day_start_ts: i64,
+    pub source_key: String,
+    pub source_label: String,
+    pub model: Option<String>,
+    pub billable_input_tokens: i64,
+    pub request_count: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
     pub total_tokens: i64,
     pub estimated_cost_usd: f64,
 }
@@ -241,12 +292,118 @@ pub struct AggregateApi {
     pub auth_type: String,
     pub auth_params_json: Option<String>,
     pub action: Option<String>,
+    pub pool: String,
+    pub wool_max_inflight: Option<i64>,
+    pub wool_cooldown_until: Option<i64>,
+    pub wool_failure_count: i64,
+    pub wool_last_preflight_at: Option<i64>,
+    pub fast: bool,
+    pub compatibility_mode: bool,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_test_at: Option<i64>,
     pub last_test_status: Option<String>,
     pub last_test_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionModelMemory {
+    pub thread_id: String,
+    pub workspace: String,
+    pub title: Option<String>,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub source: String,
+    pub locked: bool,
+    pub last_seen_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSubagentModelMemory {
+    pub parent_thread_id: String,
+    pub workspace: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub source: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceModelDefault {
+    pub workspace: String,
+    pub default_model: Option<String>,
+    pub default_reasoning_effort: Option<String>,
+    pub inherit_last_session: bool,
+    pub auto_remember: bool,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelRouteBinding {
+    pub id: String,
+    pub model: String,
+    pub aggregate_api_id: String,
+    pub enabled: bool,
+    pub priority: i64,
+    pub weight: i64,
+    pub route_strategy: String,
+    pub manual_preferred: bool,
+    pub supports_responses: bool,
+    pub supports_chat_completions: bool,
+    pub requires_adapter: bool,
+    pub last_probe_status: Option<String>,
+    pub last_error: Option<String>,
+    pub last_success_at: Option<i64>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpstreamModelCapability {
+    pub id: String,
+    pub aggregate_api_id: String,
+    pub model: String,
+    pub supports_responses: bool,
+    pub supports_chat_completions: bool,
+    pub requires_adapter: bool,
+    pub probe_status: String,
+    pub last_error: Option<String>,
+    pub last_probe_at: Option<i64>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProbeRun {
+    pub id: String,
+    pub aggregate_api_id: String,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub models_status: Option<String>,
+    pub responses_status: Option<String>,
+    pub chat_completions_status: Option<String>,
+    pub error: Option<String>,
+    pub raw_summary_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProbeCandidate {
+    pub id: String,
+    pub probe_run_id: String,
+    pub aggregate_api_id: String,
+    pub model: String,
+    pub supports_responses: bool,
+    pub supports_chat_completions: bool,
+    pub requires_adapter: bool,
+    pub suggested_route_strategy: String,
+    pub suggested_priority: i64,
+    pub suggested_weight: i64,
+    pub applied: bool,
+    pub error: Option<String>,
+    pub created_at: i64,
+    pub applied_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -668,16 +825,35 @@ impl Storage {
             include_str!("../../migrations/052_account_subscriptions.sql"),
             |s| s.ensure_account_subscriptions_table(),
         )?;
+        self.apply_sql_or_compat_migration(
+            "053_model_router",
+            include_str!("../../migrations/053_model_router.sql"),
+            |s| s.ensure_model_router_tables(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "054_aggregate_api_wool_pool",
+            include_str!("../../migrations/054_aggregate_api_wool_pool.sql"),
+            |s| s.ensure_aggregate_api_wool_columns(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "055_aggregate_api_fast",
+            include_str!("../../migrations/055_aggregate_api_fast.sql"),
+            |s| s.ensure_aggregate_api_fast_column(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "056_aggregate_api_compatibility_mode",
+            include_str!("../../migrations/056_aggregate_api_compatibility_mode.sql"),
+            |s| s.ensure_aggregate_api_compatibility_mode_column(),
+        )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_aggregate_apis_table()?;
         self.ensure_aggregate_api_secrets_table()?;
         self.ensure_request_token_stats_table()?;
         self.ensure_gateway_error_logs_table()?;
-        self.ensure_request_log_request_type_and_service_tier_columns()?;
-        self.ensure_request_log_effective_service_tier_column()?;
-        self.ensure_request_log_first_response_column()?;
+        self.ensure_request_logs_query_columns()?;
         self.ensure_model_catalog_models_table()?;
         self.ensure_account_subscriptions_table()?;
+        self.ensure_model_router_tables()?;
         Ok(())
     }
 

@@ -73,7 +73,7 @@ test.beforeEach(async ({ page }) => {
     const method = typeof payload?.method === "string" ? payload.method : "";
     const id = payload?.id ?? 1;
 
-    const resultByMethod = {
+    const resultByMethod: Record<string, unknown> = {
       "appSettings/get": SETTINGS_SNAPSHOT,
       initialize: {
         userAgent: "codex_cli_rs/0.1.19",
@@ -90,7 +90,7 @@ test.beforeEach(async ({ page }) => {
         httpStreamWorkerMin: 2,
         accountMaxInflight: 1,
       },
-    } satisfies Record<string, unknown>;
+    };
 
     if (!(method in resultByMethod)) {
       await route.fulfill({

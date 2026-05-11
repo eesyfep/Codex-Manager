@@ -1,10 +1,11 @@
 use codexmanager_core::rpc::types::{
-    AggregateApiCreateResult, AggregateApiSecretResult, AggregateApiSummary, AggregateApiTestResult,
+    AggregateApiCreateResult, AggregateApiModelUsageSummary, AggregateApiSecretResult,
+    AggregateApiSummary, AggregateApiTestResult,
 };
 use codexmanager_core::storage::{now_ts, AggregateApi};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::io::Read;
 use std::time::Instant;
 
@@ -15,6 +16,7 @@ use crate::storage_helpers::{generate_aggregate_api_id, open_storage};
 pub(crate) const AGGREGATE_API_PROVIDER_CODEX: &str = "codex";
 pub(crate) const AGGREGATE_API_PROVIDER_CLAUDE: &str = "claude";
 pub(crate) const AGGREGATE_API_PROVIDER_GEMINI: &str = "gemini";
+pub(crate) const AGGREGATE_API_PROVIDER_AZURE_OPENAI: &str = "azure_openai";
 pub(crate) const AGGREGATE_API_AUTH_APIKEY: &str = "apikey";
 pub(crate) const AGGREGATE_API_AUTH_USERPASS: &str = "userpass";
 
@@ -111,6 +113,24 @@ fn normalize_status(value: Option<String>) -> Result<String, String> {
         }
         None => Ok("active".to_string()),
     }
+}
+
+fn normalize_pool(value: Option<String>) -> Result<String, String> {
+    match value {
+        Some(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase().replace('-', "_");
+            match normalized.as_str() {
+                "" | "primary" | "main" => Ok("primary".to_string()),
+                "wool" | "free" | "promo" => Ok("wool".to_string()),
+                other => Err(format!("unsupported aggregate api pool: {other}")),
+            }
+        }
+        None => Ok("primary".to_string()),
+    }
+}
+
+fn normalize_wool_max_inflight(value: Option<i64>) -> Option<i64> {
+    value.filter(|limit| *limit > 0)
 }
 
 fn normalize_auth_type(value: Option<String>) -> Result<String, String> {
@@ -248,8 +268,9 @@ mod tests {
     use codexmanager_core::storage::AggregateApi;
 
     use super::{
-        action_path_or_default, normalize_action_override, normalize_provider_type,
-        normalize_provider_type_value, provider_default_url, AGGREGATE_API_PROVIDER_CLAUDE,
+        action_path_or_default, normalize_action_override, normalize_probe_url,
+        normalize_provider_type, normalize_provider_type_value, provider_default_url,
+        AGGREGATE_API_PROVIDER_AZURE_OPENAI, AGGREGATE_API_PROVIDER_CLAUDE,
         AGGREGATE_API_PROVIDER_GEMINI,
     };
 
@@ -263,6 +284,13 @@ mod tests {
             auth_type: "apikey".to_string(),
             auth_params_json: None,
             action: action.map(str::to_string),
+            pool: "primary".to_string(),
+            wool_max_inflight: None,
+            wool_cooldown_until: None,
+            wool_failure_count: 0,
+            wool_last_preflight_at: None,
+            fast: false,
+            compatibility_mode: false,
             status: "active".to_string(),
             created_at: 0,
             updated_at: 0,
@@ -309,6 +337,33 @@ mod tests {
         assert_eq!(
             normalize_provider_type(Some("claude".to_string())).unwrap(),
             AGGREGATE_API_PROVIDER_CLAUDE
+        );
+    }
+
+    #[test]
+    fn azure_provider_type_is_preserved_for_azure_openai_auth_defaults() {
+        assert_eq!(
+            normalize_provider_type(Some("azure".to_string())).unwrap(),
+            AGGREGATE_API_PROVIDER_AZURE_OPENAI
+        );
+        assert_eq!(
+            normalize_provider_type_value("azure_openai"),
+            AGGREGATE_API_PROVIDER_AZURE_OPENAI
+        );
+        assert_eq!(
+            provider_default_url(AGGREGATE_API_PROVIDER_AZURE_OPENAI),
+            "https://<resource>.openai.azure.com"
+        );
+    }
+
+    #[test]
+    fn normalize_probe_url_avoids_double_v1_prefix() {
+        assert_eq!(
+            normalize_probe_url(
+                "https://api.example.com/v1",
+                "/v1/chat/completions?stream=true"
+            ),
+            "https://api.example.com/v1/chat/completions?stream=true"
         );
     }
 }
@@ -452,6 +507,9 @@ fn normalize_provider_type(value: Option<String>) -> Result<String, String> {
                 "gemini" | "gemini_native" | "google" | "google_ai" | "google_gemini" => {
                     Ok(AGGREGATE_API_PROVIDER_GEMINI.to_string())
                 }
+                "azure" | "azure_openai" | "azure_openai_compat" => {
+                    Ok(AGGREGATE_API_PROVIDER_AZURE_OPENAI.to_string())
+                }
                 "claude" | "anthropic" | "anthropic_native" | "claude_code" => {
                     Ok(AGGREGATE_API_PROVIDER_CLAUDE.to_string())
                 }
@@ -482,6 +540,9 @@ fn normalize_provider_type_value(value: &str) -> String {
         "gemini" | "gemini_native" | "google" | "google_ai" | "google_gemini" => {
             AGGREGATE_API_PROVIDER_GEMINI.to_string()
         }
+        "azure" | "azure_openai" | "azure_openai_compat" => {
+            AGGREGATE_API_PROVIDER_AZURE_OPENAI.to_string()
+        }
         _ => AGGREGATE_API_PROVIDER_CODEX.to_string(),
     }
 }
@@ -501,6 +562,7 @@ fn provider_default_url(provider_type: &str) -> &'static str {
     match provider_type {
         AGGREGATE_API_PROVIDER_CLAUDE => "https://api.anthropic.com/v1",
         AGGREGATE_API_PROVIDER_GEMINI => "https://generativelanguage.googleapis.com",
+        AGGREGATE_API_PROVIDER_AZURE_OPENAI => "https://<resource>.openai.azure.com",
         _ => "https://api.openai.com/v1",
     }
 }
@@ -522,7 +584,10 @@ fn normalize_probe_url(base_url: &str, suffix: &str) -> String {
     if suffix.trim().is_empty() {
         return base.to_string();
     }
-    if base.ends_with("/v1") {
+    if base.ends_with("/v1") && suffix.trim_start_matches('/').starts_with("v1/") {
+        let suffix = suffix.trim_start_matches('/');
+        format!("{base}/{}", suffix.trim_start_matches("v1/"))
+    } else if base.ends_with("/v1") {
         format!("{base}{suffix}")
     } else {
         format!("{base}/v1{suffix}")
@@ -547,6 +612,210 @@ fn read_first_chunk(mut response: reqwest::blocking::Response) -> Result<(), Str
         Ok(())
     } else {
         Err("No response data received".to_string())
+    }
+}
+
+fn read_stream_until_terminal(
+    mut response: reqwest::blocking::Response,
+    kind: CodexProbeStreamKind,
+) -> Result<(), String> {
+    let mut buf = [0u8; 512];
+    let mut collected = Vec::new();
+    loop {
+        match response.read(&mut buf) {
+            Ok(0) => break,
+            Ok(read) => {
+                collected.extend_from_slice(&buf[..read]);
+                if collected.len() >= 4096 {
+                    break;
+                }
+                let text = String::from_utf8_lossy(&collected);
+                if codex_probe_stream_has_terminal(text.as_ref(), kind) {
+                    return Ok(());
+                }
+            }
+            Err(err) => {
+                if collected.is_empty() {
+                    return Err(err.to_string());
+                }
+                break;
+            }
+        }
+    }
+
+    let text = String::from_utf8_lossy(&collected);
+    if codex_probe_stream_has_terminal(text.as_ref(), kind) {
+        return Ok(());
+    }
+    match kind {
+        CodexProbeStreamKind::Responses => Err(
+            "codex responses stream did not reach response.completed or response.done".to_string(),
+        ),
+        CodexProbeStreamKind::ChatCompletions => {
+            Err("codex chat stream did not reach [DONE] or finish_reason".to_string())
+        }
+    }
+}
+
+fn read_models_from_response(
+    mut response: reqwest::blocking::Response,
+) -> Result<Vec<String>, String> {
+    let mut body = String::new();
+    response
+        .read_to_string(&mut body)
+        .map_err(|err| err.to_string())?;
+    if body.trim().is_empty() {
+        return Err("No response data received".to_string());
+    }
+    let value: Value =
+        serde_json::from_str(body.as_str()).map_err(|err| format!("models invalid_json={err}"))?;
+    Ok(extract_models_from_models_response(&value))
+}
+
+fn extract_models_from_models_response(value: &Value) -> Vec<String> {
+    let mut models = Vec::<String>::new();
+    let Some(items) = value.get("data").and_then(Value::as_array) else {
+        return models;
+    };
+    for item in items {
+        let Some(id) = item
+            .get("id")
+            .or_else(|| item.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if !models
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(id))
+        {
+            models.push(id.to_string());
+        }
+    }
+    models
+}
+
+fn configured_probe_fallback_models() -> Vec<String> {
+    crate::app_settings::current_model_router_probe_fallback_models()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn looks_like_text_probe_model(model: &str) -> bool {
+    let value = model.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return false;
+    }
+    let non_text_markers = [
+        "dall-e",
+        "dalle",
+        "image",
+        "sora",
+        "tts",
+        "whisper",
+        "audio",
+        "realtime",
+        "transcribe",
+        "embedding",
+        "embed",
+        "moderation",
+        "omni-moderation",
+        "babbage",
+    ];
+    if non_text_markers.iter().any(|marker| value.contains(marker)) {
+        return false;
+    }
+    let text_markers = [
+        "gpt", "o1", "o3", "o4", "glm", "mimo", "kimi", "qwen", "deepseek", "claude", "gemini",
+        "grok", "llama", "mistral", "mixtral", "coder",
+    ];
+    text_markers.iter().any(|marker| value.contains(marker))
+}
+
+fn select_codex_probe_model(
+    discovered_models: &[String],
+    bound_models: &[String],
+) -> Option<String> {
+    discovered_models
+        .iter()
+        .find(|model| looks_like_text_probe_model(model))
+        .cloned()
+        .or_else(|| discovered_models.first().cloned())
+        .or_else(|| {
+            bound_models
+                .iter()
+                .find(|model| looks_like_text_probe_model(model))
+                .cloned()
+        })
+        .or_else(|| bound_models.first().cloned())
+        .or_else(|| configured_probe_fallback_models().into_iter().next())
+}
+
+fn list_bound_probe_models(api_id: &str) -> Vec<String> {
+    let Some(storage) = open_storage() else {
+        return Vec::new();
+    };
+    let mut models = Vec::<String>::new();
+    let Ok(bindings) = storage.list_model_route_bindings(None) else {
+        return models;
+    };
+    for binding in bindings {
+        if !binding.enabled || binding.aggregate_api_id != api_id {
+            continue;
+        }
+        let model = binding.model.trim();
+        if model.is_empty()
+            || models
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(model))
+        {
+            continue;
+        }
+        models.push(model.to_string());
+    }
+    models
+}
+
+#[derive(Clone, Copy)]
+enum CodexProbeStreamKind {
+    Responses,
+    ChatCompletions,
+}
+
+fn codex_probe_stream_has_terminal(body: &str, kind: CodexProbeStreamKind) -> bool {
+    match kind {
+        CodexProbeStreamKind::Responses => body.lines().any(|line| {
+            let event = line.trim().strip_prefix("event:").map(str::trim);
+            matches!(event, Some("response.completed" | "response.done"))
+        }),
+        CodexProbeStreamKind::ChatCompletions => body.lines().any(|line| {
+            let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else {
+                return false;
+            };
+            if data == "[DONE]" {
+                return true;
+            }
+            serde_json::from_str::<serde_json::Value>(data)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("choices")
+                        .and_then(serde_json::Value::as_array)
+                        .cloned()
+                })
+                .is_some_and(|choices| {
+                    choices.iter().any(|choice| {
+                        choice
+                            .get("finish_reason")
+                            .is_some_and(|reason| !reason.is_null())
+                    })
+                })
+        }),
     }
 }
 
@@ -584,17 +853,20 @@ fn build_claude_probe_body() -> serde_json::Value {
 ///
 /// # 返回
 /// 返回函数执行结果
-fn build_codex_probe_body() -> serde_json::Value {
+fn build_codex_probe_body(model: &str) -> serde_json::Value {
     json!({
-        "model": "gpt-5.1-codex",
+        "model": model,
+        "instructions": "Reply with exactly: pong",
         "input": [{
             "role": "user",
             "content": [{
-                "type": "text",
-                "text": "Who are you?"
+                "type": "input_text",
+                "text": "ping"
             }]
         }],
-        "stream": true
+        "stream": true,
+        "store": false,
+        "max_output_tokens": 8
     })
 }
 
@@ -691,9 +963,9 @@ fn probe_codex_models_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
-) -> Result<i64, String> {
-    let probe_path = action_path_or_default(api, "/models");
-    let base_url = normalize_probe_url(api.url.as_str(), probe_path.as_str());
+) -> Result<(i64, Vec<String>), String> {
+    let probe_path = "/models";
+    let base_url = normalize_probe_url(api.url.as_str(), probe_path);
     let url = append_client_version_query(base_url.as_str());
     let builder = client.get(url.as_str());
     let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
@@ -712,8 +984,8 @@ fn probe_codex_models_endpoint(
     if !response.status().is_success() {
         return Err(format!("codex models probe http_status={status_code}"));
     }
-    read_first_chunk(response)?;
-    Ok(status_code)
+    let models = read_models_from_response(response)?;
+    Ok((status_code, models))
 }
 
 /// 函数 `probe_codex_responses_endpoint`
@@ -733,6 +1005,7 @@ fn probe_codex_responses_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
+    model: &str,
 ) -> Result<i64, String> {
     let action_hint = api
         .action
@@ -760,12 +1033,13 @@ fn probe_codex_responses_endpoint(
     };
     let request_body = if probe_path.to_ascii_lowercase().contains("chat/completions") {
         json!({
-            "model": "gpt-4o-mini",
-            "messages": [{"role":"user","content":"hi"}],
-            "stream": false
+            "model": model,
+            "messages": [{"role":"user","content":"ping"}],
+            "stream": true,
+            "max_tokens": 1
         })
     } else {
-        build_codex_probe_body()
+        build_codex_probe_body(model)
     };
     let response = add_codex_probe_headers(builder)?
         .header("content-type", "application/json")
@@ -778,7 +1052,12 @@ fn probe_codex_responses_endpoint(
     if !response.status().is_success() {
         return Err(format!("codex probe http_status={status_code}"));
     }
-    read_first_chunk(response)?;
+    let stream_kind = if probe_path.to_ascii_lowercase().contains("chat/completions") {
+        CodexProbeStreamKind::ChatCompletions
+    } else {
+        CodexProbeStreamKind::Responses
+    };
+    read_stream_until_terminal(response, stream_kind)?;
     Ok(status_code)
 }
 
@@ -795,24 +1074,35 @@ fn probe_codex_responses_endpoint(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn probe_codex_endpoint(
+pub(crate) fn probe_codex_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
 ) -> Result<i64, String> {
     let models_result = probe_codex_models_endpoint(client, api, secret);
-    if let Ok(code) = models_result {
+    let discovered_models = models_result
+        .as_ref()
+        .map(|(_, models)| models.clone())
+        .unwrap_or_default();
+    let bound_models = if discovered_models.is_empty() {
+        list_bound_probe_models(api.id.as_str())
+    } else {
+        Vec::new()
+    };
+    let Some(model) = select_codex_probe_model(&discovered_models, &bound_models) else {
+        let models_err = models_result
+            .err()
+            .unwrap_or_else(|| "codex models probe returned no usable model".to_string());
+        return Err(format!("{models_err}; no configured probe fallback model"));
+    };
+    let responses_result = probe_codex_responses_endpoint(client, api, secret, model.as_str());
+    if let Ok(code) = responses_result {
         return Ok(code);
     }
 
     let models_err = models_result
         .err()
-        .unwrap_or_else(|| "codex models probe failed".to_string());
-    let responses_result = probe_codex_responses_endpoint(client, api, secret);
-    if let Ok(code) = responses_result {
-        return Ok(code);
-    }
-
+        .unwrap_or_else(|| format!("codex models probe selected model={model}"));
     let responses_err = responses_result
         .err()
         .unwrap_or_else(|| "codex responses probe failed".to_string());
@@ -832,7 +1122,7 @@ fn probe_codex_endpoint(
 ///
 /// # 返回
 /// 返回函数执行结果
-fn probe_claude_endpoint(
+pub(crate) fn probe_claude_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
@@ -871,7 +1161,7 @@ fn probe_claude_endpoint(
     Ok(status_code)
 }
 
-fn probe_gemini_endpoint(
+pub(crate) fn probe_gemini_endpoint(
     client: &reqwest::blocking::Client,
     api: &AggregateApi,
     secret: &str,
@@ -935,12 +1225,40 @@ pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> 
                 .filter(|value| !value.is_empty())
                 .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok()),
             action: item.action,
+            pool: item.pool,
+            wool_max_inflight: item.wool_max_inflight,
+            wool_cooldown_until: item.wool_cooldown_until,
+            wool_failure_count: item.wool_failure_count,
+            wool_last_preflight_at: item.wool_last_preflight_at,
+            fast: item.fast,
+            compatibility_mode: item.compatibility_mode,
             status: item.status,
             created_at: item.created_at,
             updated_at: item.updated_at,
             last_test_at: item.last_test_at,
             last_test_status: item.last_test_status,
             last_test_error: item.last_test_error,
+        })
+        .collect())
+}
+
+pub(crate) fn aggregate_api_model_usage() -> Result<Vec<AggregateApiModelUsageSummary>, String> {
+    let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let items = storage
+        .summarize_aggregate_api_model_usage()
+        .map_err(|err| format!("summarize aggregate api model usage failed: {err}"))?;
+    Ok(items
+        .into_iter()
+        .map(|item| AggregateApiModelUsageSummary {
+            aggregate_api_url: item.aggregate_api_url,
+            model: item.model,
+            request_count: item.request_count,
+            input_tokens: item.input_tokens,
+            cached_input_tokens: item.cached_input_tokens,
+            output_tokens: item.output_tokens,
+            reasoning_output_tokens: item.reasoning_output_tokens,
+            total_tokens: item.total_tokens,
+            estimated_cost_usd: item.estimated_cost_usd,
         })
         .collect())
 }
@@ -967,6 +1285,10 @@ pub(crate) fn create_aggregate_api(
     auth_params: Option<serde_json::Value>,
     action_custom_enabled: Option<bool>,
     action: Option<String>,
+    pool: Option<String>,
+    wool_max_inflight: Option<i64>,
+    fast: Option<bool>,
+    compatibility_mode: Option<bool>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<AggregateApiCreateResult, String> {
@@ -982,6 +1304,8 @@ pub(crate) fn create_aggregate_api(
         auth_custom_enabled,
         auth_params,
     )?;
+    let normalized_pool = normalize_pool(pool)?;
+    let normalized_wool_max_inflight = normalize_wool_max_inflight(wool_max_inflight);
     let normalized_action =
         normalize_action_override(action_custom_enabled, action)?.unwrap_or(None);
     let normalized_secret = if normalized_auth_type == AGGREGATE_API_AUTH_APIKEY {
@@ -1012,6 +1336,13 @@ pub(crate) fn create_aggregate_api(
             .map(|value| if value.is_empty() { None } else { Some(value) })
             .unwrap_or(None),
         action: normalized_action,
+        pool: normalized_pool,
+        wool_max_inflight: normalized_wool_max_inflight,
+        wool_cooldown_until: None,
+        wool_failure_count: 0,
+        wool_last_preflight_at: None,
+        fast: fast.unwrap_or(false),
+        compatibility_mode: compatibility_mode.unwrap_or(false),
         status: "active".to_string(),
         created_at,
         updated_at: created_at,
@@ -1026,6 +1357,7 @@ pub(crate) fn create_aggregate_api(
         let _ = storage.delete_aggregate_api(&id);
         return Err(format!("persist aggregate api secret failed: {err}"));
     }
+    gateway::invalidate_aggregate_api_routing_state();
     Ok(AggregateApiCreateResult {
         id,
         key: if record.auth_type == AGGREGATE_API_AUTH_APIKEY {
@@ -1060,6 +1392,10 @@ pub(crate) fn update_aggregate_api(
     auth_params: Option<serde_json::Value>,
     action_custom_enabled: Option<bool>,
     action: Option<String>,
+    pool: Option<String>,
+    wool_max_inflight: Option<i64>,
+    fast: Option<bool>,
+    compatibility_mode: Option<bool>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<(), String> {
@@ -1107,6 +1443,30 @@ pub(crate) fn update_aggregate_api(
         let normalized_status = normalize_status(Some(status))?;
         storage
             .update_aggregate_api_status(api_id, normalized_status.as_str())
+            .map_err(|err| err.to_string())?;
+    }
+    if let Some(pool) = pool {
+        let normalized_pool = normalize_pool(Some(pool))?;
+        storage
+            .update_aggregate_api_pool(api_id, normalized_pool.as_str())
+            .map_err(|err| err.to_string())?;
+    }
+    if wool_max_inflight.is_some() {
+        storage
+            .update_aggregate_api_wool_max_inflight(
+                api_id,
+                normalize_wool_max_inflight(wool_max_inflight),
+            )
+            .map_err(|err| err.to_string())?;
+    }
+    if let Some(fast) = fast {
+        storage
+            .update_aggregate_api_fast(api_id, fast)
+            .map_err(|err| err.to_string())?;
+    }
+    if let Some(compatibility_mode) = compatibility_mode {
+        storage
+            .update_aggregate_api_compatibility_mode(api_id, compatibility_mode)
             .map_err(|err| err.to_string())?;
     }
     if let Some(url) = url {
@@ -1176,6 +1536,7 @@ pub(crate) fn update_aggregate_api(
                 .map_err(|err| err.to_string())?;
         }
     }
+    crate::gateway::invalidate_aggregate_api_routing_state();
     Ok(())
 }
 
@@ -1197,7 +1558,9 @@ pub(crate) fn delete_aggregate_api(api_id: &str) -> Result<(), String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     storage
         .delete_aggregate_api(api_id)
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    gateway::invalidate_aggregate_api_routing_state();
+    Ok(())
 }
 
 /// 函数 `read_aggregate_api_secret`

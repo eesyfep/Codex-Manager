@@ -1,15 +1,183 @@
 use codexmanager_core::rpc::types::{ModelInfo, ModelsResponse};
+
 const MODEL_CACHE_SCOPE_DEFAULT: &str = "default";
+const DEFAULT_CODEX_COMPAT_INSTRUCTIONS: &str =
+    "You are Codex, a helpful AI assistant. Follow the user's instructions.";
+
+fn default_codex_model_messages() -> serde_json::Value {
+    serde_json::json!({
+        "instructions_template": "You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n{{personality}}\n",
+        "instructions_variables": {
+            "personality_default": "",
+            "personality_friendly": "# Personality\n\nYou optimize for team morale and being a supportive teammate as much as code quality.",
+            "personality_pragmatic": "# Personality\n\nYou are a deeply pragmatic, effective software engineer. You take engineering quality seriously."
+        },
+        "prefer_websockets": true,
+    })
+}
 
 #[derive(serde::Serialize)]
-struct OfficialModelsResponse<'a> {
-    models: &'a [ModelInfo],
+struct OfficialModelsResponse {
+    models: Vec<serde_json::Value>,
+}
+
+fn normalize_visibility(value: Option<&str>) -> Option<&str> {
+    let trimmed = value.map(str::trim).unwrap_or_default();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn is_visible_for_codex_app(model: &ModelInfo) -> bool {
+    if !model.supported_in_api {
+        return false;
+    }
+    !matches!(
+        normalize_visibility(model.visibility.as_deref()),
+        Some("hide") | Some("hidden")
+    )
+}
+
+fn serialize_visible_model_for_codex_app(model: &ModelInfo) -> Option<serde_json::Value> {
+    if !is_visible_for_codex_app(model) {
+        return None;
+    }
+
+    let mut value = serde_json::to_value(model).ok()?;
+    let object = value.as_object_mut()?;
+
+    if model.display_name.trim().is_empty() {
+        object.insert(
+            "display_name".to_string(),
+            serde_json::Value::String(model.slug.clone()),
+        );
+    }
+    if normalize_visibility(model.visibility.as_deref()).is_none() {
+        object.insert(
+            "visibility".to_string(),
+            serde_json::Value::String("list".to_string()),
+        );
+    }
+    if model
+        .shell_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        object.insert(
+            "shell_type".to_string(),
+            serde_json::Value::String("shell_command".to_string()),
+        );
+    }
+    if model.supported_reasoning_levels.is_empty() {
+        object.insert(
+            "supported_reasoning_levels".to_string(),
+            serde_json::Value::Array(Vec::new()),
+        );
+    }
+    if model.additional_speed_tiers.is_empty() {
+        object.insert(
+            "additional_speed_tiers".to_string(),
+            serde_json::Value::Array(Vec::new()),
+        );
+    }
+    if model
+        .base_instructions
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        object.insert(
+            "base_instructions".to_string(),
+            serde_json::Value::String(DEFAULT_CODEX_COMPAT_INSTRUCTIONS.to_string()),
+        );
+    }
+    if model.model_messages.is_none() {
+        object.insert("model_messages".to_string(), default_codex_model_messages());
+    }
+    if model.supports_reasoning_summaries.is_none() {
+        object.insert(
+            "supports_reasoning_summaries".to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+    if model.default_reasoning_summary.is_none() {
+        object.insert(
+            "default_reasoning_summary".to_string(),
+            serde_json::Value::String("auto".to_string()),
+        );
+    }
+    if model.support_verbosity.is_none() {
+        object.insert(
+            "support_verbosity".to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+    if model
+        .web_search_tool_type
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        object.insert(
+            "web_search_tool_type".to_string(),
+            serde_json::Value::String("text".to_string()),
+        );
+    }
+    if model.truncation_policy.is_none() {
+        object.insert(
+            "truncation_policy".to_string(),
+            serde_json::json!({ "mode": "tokens", "limit": 10000 }),
+        );
+    }
+    if model.supports_parallel_tool_calls.is_none() {
+        object.insert(
+            "supports_parallel_tool_calls".to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+    if model.effective_context_window_percent.is_none() {
+        object.insert(
+            "effective_context_window_percent".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(95)),
+        );
+    }
+    if model.experimental_supported_tools.is_empty() {
+        object.insert(
+            "experimental_supported_tools".to_string(),
+            serde_json::Value::Array(Vec::new()),
+        );
+    }
+    if model.input_modalities.is_empty() {
+        object.insert(
+            "input_modalities".to_string(),
+            serde_json::json!(["text", "image"]),
+        );
+    }
+    if model.supports_search_tool.is_none() {
+        object.insert(
+            "supports_search_tool".to_string(),
+            serde_json::Value::Bool(false),
+        );
+    }
+
+    Some(value)
 }
 
 fn serialize_models_response(models: &ModelsResponse) -> String {
     let models = crate::apikey_models::ensure_codex_image_tool_model_listed(models);
+    let visible_models = models
+        .models
+        .iter()
+        .filter_map(serialize_visible_model_for_codex_app)
+        .collect::<Vec<_>>();
     serde_json::to_string(&OfficialModelsResponse {
-        models: &models.models,
+        models: visible_models,
     })
     .unwrap_or_else(|_| "{\"models\":[]}".to_string())
 }
@@ -96,11 +264,10 @@ pub(super) fn maybe_respond_local_models(
     let models = if !cached.is_empty() {
         cached
     } else {
-        match super::fetch_models_for_picker() {
+        match crate::apikey_models::read_model_options(true) {
             Ok(fetched) if !fetched.is_empty() => {
-                let merged = crate::apikey_models::merge_models_response(cached.clone(), fetched);
                 if let Err(err) =
-                    crate::apikey_models::save_model_options_with_storage(storage, &merged)
+                    crate::apikey_models::save_model_options_with_storage(storage, &fetched)
                 {
                     log::warn!(
                         "event=gateway_model_catalog_upsert_failed scope={} err={}",
@@ -108,7 +275,7 @@ pub(super) fn maybe_respond_local_models(
                         err
                     );
                 }
-                merged
+                fetched
             }
             Ok(_) => {
                 let message = crate::gateway::bilingual_error(

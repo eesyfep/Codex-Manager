@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import net from "node:net";
@@ -9,6 +9,10 @@ const desktopDevHost = "127.0.0.1";
 const desktopDevPort = 3005;
 const desktopDevWaitTimeoutMs = 10_000;
 const desktopDevWaitIntervalMs = 500;
+const tauriDir = cwd;
+const generatedDir = resolve(tauriDir, "gen");
+const generatedNsisHookPath = resolve(generatedDir, "nsis-webview2-loader-hook.nsh");
+const generatedWebView2LoaderPath = resolve(generatedDir, "WebView2Loader.dll");
 const candidates = [
   cwd,
   resolve(cwd, "apps"),
@@ -252,11 +256,17 @@ async function cleanupStaleDesktopDevState() {
 function resolvePnpmCommand() {
   const baseArgs = ["--dir", frontendDir, "run", task];
   const nodeBinDir = dirname(process.execPath);
+  const appData = process.env.APPDATA;
+  const windowsNodeCandidates = [
+    appData ? { command: process.execPath, args: [resolve(appData, "npm", "node_modules", "pnpm", "bin", "pnpm.cjs"), ...baseArgs] } : null,
+    { command: process.execPath, args: [resolve(nodeBinDir, "node_modules", "corepack", "dist", "pnpm.js"), ...baseArgs] },
+  ].filter(Boolean);
   const windowsCandidates = [
-    { command: resolve(nodeBinDir, "pnpm.cmd"), args: baseArgs },
-    { command: resolve(nodeBinDir, "corepack.cmd"), args: ["pnpm", ...baseArgs] },
+    ...windowsNodeCandidates,
     { command: "pnpm.cmd", args: baseArgs },
     { command: "corepack.cmd", args: ["pnpm", ...baseArgs] },
+    { command: resolve(nodeBinDir, "pnpm.cmd"), args: baseArgs },
+    { command: resolve(nodeBinDir, "corepack.cmd"), args: ["pnpm", ...baseArgs] },
   ];
   const defaultCandidates = [
     { command: "pnpm", args: baseArgs },
@@ -267,15 +277,107 @@ function resolvePnpmCommand() {
   return candidates.find((candidate) => !candidate.command.includes(":") || existsSync(candidate.command)) ?? candidates[0];
 }
 
+function escapeNsisPath(input) {
+  return input.replace(/\\/g, "\\\\");
+}
+
+function findFirstExistingFile(candidates) {
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function findRegistryWebView2Loader() {
+  const cargoHome = process.env.CARGO_HOME || resolve(process.env.USERPROFILE || "~", ".cargo");
+  const registrySrcDir = resolve(cargoHome, "registry", "src");
+  if (!existsSync(registrySrcDir)) {
+    return null;
+  }
+
+  const archDir = process.arch === "ia32" ? "x86" : process.arch === "arm64" ? "arm64" : "x64";
+  for (const registryRoot of readdirSync(registrySrcDir, { withFileTypes: true })) {
+    if (!registryRoot.isDirectory()) {
+      continue;
+    }
+
+    const rootDir = resolve(registrySrcDir, registryRoot.name);
+    for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !entry.name.startsWith("webview2-com-sys-")) {
+        continue;
+      }
+
+      const candidate = resolve(rootDir, entry.name, archDir, "WebView2Loader.dll");
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return null;
+}
+
+function ensureStableWebView2Loader() {
+  const stableLoaderPath = generatedWebView2LoaderPath;
+  const defaultBuildCandidates = [resolve(tauriDir, "target", "release", "WebView2Loader.dll")];
+  let sourceLoaderPath = findFirstExistingFile(defaultBuildCandidates);
+
+  if (!sourceLoaderPath) {
+    const buildDir = resolve(tauriDir, "target", "release", "build");
+    if (existsSync(buildDir)) {
+      for (const entry of readdirSync(buildDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith("webview2-com-sys-")) {
+          continue;
+        }
+        const candidate = resolve(buildDir, entry.name, "out", "x64", "WebView2Loader.dll");
+        if (existsSync(candidate)) {
+          sourceLoaderPath = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!sourceLoaderPath) {
+    sourceLoaderPath = findRegistryWebView2Loader();
+  }
+
+  if (!sourceLoaderPath) {
+    throw new Error("未找到可用的 WebView2Loader.dll 源文件，无法生成安装包修复钩子。");
+  }
+
+  mkdirSync(generatedDir, { recursive: true });
+  copyFileSync(sourceLoaderPath, stableLoaderPath);
+  return stableLoaderPath;
+}
+
+function writeNsisWebView2LoaderHook() {
+  const loaderPath = ensureStableWebView2Loader();
+  const escapedLoaderPath = escapeNsisPath(loaderPath);
+  const hookSource = `!macro NSIS_HOOK_PREINSTALL
+  ; Force-include WebView2Loader.dll for installer builds when bundler resource
+  ; collection does not follow the custom cargo target directory.
+  File "/oname=WebView2Loader.dll" "${escapedLoaderPath}"
+!macroend
+`;
+
+  mkdirSync(generatedDir, { recursive: true });
+  writeFileSync(generatedNsisHookPath, hookSource, { encoding: "utf8" });
+}
+
 const frontendDir = candidates.find(hasFrontendPackage);
 if (!frontendDir) {
   console.error(`前端项目目录不存在，当前工作目录: ${cwd}`);
   process.exit(1);
 }
 
+writeNsisWebView2LoaderHook();
+
 if (task === "build:desktop" && hasBuiltFrontendDist(frontendDir)) {
-  console.log(`前端产物已存在，跳过重复构建: ${resolve(frontendDir, "out", "index.html")}`);
-  process.exit(0);
+  console.log(`检测到已有前端产物，将重新构建以避免打包旧界面: ${resolve(frontendDir, "out", "index.html")}`);
 }
 
 if (task === "dev:desktop") {
@@ -304,7 +406,11 @@ if (task === "dev:desktop") {
 
 const packageManager = resolvePnpmCommand();
 console.log(`执行前端任务: ${packageManager.command} ${packageManager.args.join(" ")}`);
-const needsShell = process.platform === "win32" && /\.cmd$/i.test(packageManager.command);
+const needsShell =
+  process.platform === "win32" &&
+  /\.cmd$/i.test(packageManager.command) &&
+  !packageManager.command.includes(":") &&
+  !packageManager.args.some((arg) => /\s/.test(arg));
 const result = spawnSync(packageManager.command, packageManager.args, {
   stdio: "inherit",
   shell: needsShell,

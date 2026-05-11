@@ -40,6 +40,7 @@ pub(super) fn record_local_result(
         ctx.storage,
         super::request_log::RequestLogTraceContext {
             trace_id: Some(ctx.trace_id),
+            conversation_id: None,
             original_path: Some(ctx.original_path),
             adapted_path: Some(ctx.path),
             response_adapter: Some(ctx.response_adapter),

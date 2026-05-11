@@ -77,8 +77,8 @@ fn with_bind_mode(mode: Option<&str>, test: impl FnOnce()) {
 /// # 返回
 /// 无
 #[test]
-fn default_addr_is_localhost() {
-    assert_eq!(codexmanager_service::DEFAULT_ADDR, "localhost:48760");
+fn default_addr_is_loopback_ip() {
+    assert_eq!(codexmanager_service::DEFAULT_ADDR, "127.0.0.1:48760");
 }
 
 /// 函数 `default_bind_addr_is_all_interfaces`
@@ -109,8 +109,8 @@ fn default_bind_addr_is_all_interfaces() {
 /// # 返回
 /// 无
 #[test]
-fn default_web_addr_is_localhost() {
-    assert_eq!(codexmanager_service::DEFAULT_WEB_ADDR, "localhost:48761");
+fn default_web_addr_is_loopback_ip() {
+    assert_eq!(codexmanager_service::DEFAULT_WEB_ADDR, "127.0.0.1:48761");
 }
 
 /// 函数 `default_web_bind_addr_is_all_interfaces`
@@ -145,15 +145,15 @@ fn listener_bind_addr_defaults_to_loopback() {
     with_bind_mode(None, || {
         assert_eq!(
             codexmanager_service::default_listener_bind_addr(),
-            "localhost:48760"
-        );
-        assert_eq!(
-            codexmanager_service::listener_bind_addr("localhost:48760"),
-            "localhost:48760"
+            "127.0.0.1:48760"
         );
         assert_eq!(
             codexmanager_service::listener_bind_addr("127.0.0.1:48760"),
-            "localhost:48760"
+            "127.0.0.1:48760"
+        );
+        assert_eq!(
+            codexmanager_service::listener_bind_addr("127.0.0.1:48760"),
+            "127.0.0.1:48760"
         );
     });
 }
@@ -179,7 +179,7 @@ fn listener_bind_addr_maps_loopback_to_all_interfaces_when_enabled() {
                 "0.0.0.0:48760"
             );
             assert_eq!(
-                codexmanager_service::listener_bind_addr("localhost:48760"),
+                codexmanager_service::listener_bind_addr("127.0.0.1:48760"),
                 "0.0.0.0:48760"
             );
             assert_eq!(
@@ -206,7 +206,7 @@ fn default_web_listener_addr_tracks_service_bind_mode() {
     with_bind_mode(None, || {
         assert_eq!(
             codexmanager_service::default_web_listener_addr(),
-            "localhost:48761"
+            "127.0.0.1:48761"
         );
     });
 
@@ -312,7 +312,7 @@ fn current_service_bind_mode_prefers_runtime_env() {
     with_bind_mode(
         Some(codexmanager_service::SERVICE_BIND_MODE_ALL_INTERFACES),
         || {
-            std::env::set_var("CODEXMANAGER_SERVICE_ADDR", "localhost:48760");
+            std::env::set_var("CODEXMANAGER_SERVICE_ADDR", "127.0.0.1:48760");
             assert_eq!(
                 codexmanager_service::current_service_bind_mode(),
                 codexmanager_service::SERVICE_BIND_MODE_LOOPBACK

@@ -59,16 +59,20 @@ fn rpc_call_on_socket(
 ) -> Result<serde_json::Value, String> {
     let io_timeout = rpc_io_timeout(method, params.as_ref());
     let mut stream = TcpStream::connect_timeout(&sock, RPC_CONNECT_TIMEOUT).map_err(|e| {
-            let msg = format!("Failed to connect to service at {addr}: {e}");
-            log::warn!(
-                "rpc connect failed ({} -> {} via {}): {}",
-                method,
-                addr,
-                sock,
-                e
-            );
-            msg
-        })?;
+        let code = e.raw_os_error();
+        let msg = format!(
+            "管理服务不可达: original_addr={addr}, socket={sock}, os_error={code:?}, error={e}"
+        );
+        log::warn!(
+            "rpc connect failed ({} -> {} via {} os_error={:?}): {}",
+            method,
+            addr,
+            sock,
+            code,
+            e
+        );
+        msg
+    })?;
     let _ = stream.set_read_timeout(Some(io_timeout));
     let _ = stream.set_write_timeout(Some(io_timeout));
 

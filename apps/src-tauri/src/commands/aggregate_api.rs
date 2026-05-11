@@ -12,10 +12,15 @@ use crate::commands::shared::rpc_call_in_background;
 /// # 返回
 /// 返回函数执行结果
 #[tauri::command]
-pub async fn service_aggregate_api_list(
+pub async fn service_aggregate_api_list(addr: Option<String>) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("aggregateApi/list", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_aggregate_api_model_usage(
     addr: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    rpc_call_in_background("aggregateApi/list", addr, None).await
+    rpc_call_in_background("aggregateApi/modelUsage", addr, None).await
 }
 
 /// 函数 `service_aggregate_api_create`
@@ -47,6 +52,10 @@ pub async fn service_aggregate_api_create(
     auth_params: Option<serde_json::Value>,
     action_custom_enabled: Option<bool>,
     action: Option<String>,
+    pool: Option<String>,
+    wool_max_inflight: Option<i64>,
+    fast: Option<bool>,
+    compatibility_mode: Option<bool>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -61,6 +70,10 @@ pub async fn service_aggregate_api_create(
         "authParams": auth_params,
         "actionCustomEnabled": action_custom_enabled,
         "action": action,
+        "pool": pool,
+        "woolMaxInflight": wool_max_inflight,
+        "fast": fast,
+        "compatibilityMode": compatibility_mode,
         "username": username,
         "password": password,
     });
@@ -99,6 +112,10 @@ pub async fn service_aggregate_api_update(
     auth_params: Option<serde_json::Value>,
     action_custom_enabled: Option<bool>,
     action: Option<String>,
+    pool: Option<String>,
+    wool_max_inflight: Option<i64>,
+    fast: Option<bool>,
+    compatibility_mode: Option<bool>,
     username: Option<String>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
@@ -115,6 +132,10 @@ pub async fn service_aggregate_api_update(
         "authParams": auth_params,
         "actionCustomEnabled": action_custom_enabled,
         "action": action,
+        "pool": pool,
+        "woolMaxInflight": wool_max_inflight,
+        "fast": fast,
+        "compatibilityMode": compatibility_mode,
         "username": username,
         "password": password,
     });

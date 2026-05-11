@@ -4,6 +4,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 static ACCOUNT_INFLIGHT: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static WOOL_API_INFLIGHT: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+static WOOL_PREFLIGHT_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
 static GATEWAY_REQUEST_LABELS: OnceLock<Mutex<HashMap<GatewayRequestLabelKey, usize>>> =
     OnceLock::new();
 static GATEWAY_TOTAL_REQUESTS: AtomicUsize = AtomicUsize::new(0);
@@ -667,6 +669,12 @@ pub(crate) struct AccountInFlightGuard {
     account_id: String,
 }
 
+pub(crate) struct WoolInFlightGuard {
+    api_id: String,
+}
+
+pub(crate) struct WoolPreflightGuard;
+
 impl Drop for AccountInFlightGuard {
     /// 函数 `drop`
     ///
@@ -692,6 +700,26 @@ impl Drop for AccountInFlightGuard {
     }
 }
 
+impl Drop for WoolInFlightGuard {
+    fn drop(&mut self) {
+        let lock = WOOL_API_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut map = crate::lock_utils::lock_recover(lock, "wool_api_inflight");
+        if let Some(value) = map.get_mut(&self.api_id) {
+            if *value > 1 {
+                *value -= 1;
+            } else {
+                map.remove(&self.api_id);
+            }
+        }
+    }
+}
+
+impl Drop for WoolPreflightGuard {
+    fn drop(&mut self) {
+        atomic_dec_saturating(&WOOL_PREFLIGHT_INFLIGHT);
+    }
+}
+
 /// 函数 `acquire_account_inflight`
 ///
 /// 作者: gaohongshun
@@ -710,6 +738,48 @@ pub(crate) fn acquire_account_inflight(account_id: &str) -> AccountInFlightGuard
     *entry += 1;
     AccountInFlightGuard {
         account_id: account_id.to_string(),
+    }
+}
+
+pub(crate) fn acquire_wool_inflight(
+    api_id: &str,
+    per_api_limit: usize,
+    pool_limit: usize,
+) -> Option<WoolInFlightGuard> {
+    let per_api_limit = per_api_limit.max(1);
+    let pool_limit = pool_limit.max(1);
+    let lock = WOOL_API_INFLIGHT.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = crate::lock_utils::lock_recover(lock, "wool_api_inflight");
+    let pool_current: usize = map.values().copied().sum();
+    if pool_current >= pool_limit {
+        return None;
+    }
+    let api_current = map.get(api_id).copied().unwrap_or(0);
+    if api_current >= per_api_limit {
+        return None;
+    }
+    map.insert(api_id.to_string(), api_current + 1);
+    Some(WoolInFlightGuard {
+        api_id: api_id.to_string(),
+    })
+}
+
+pub(crate) fn acquire_wool_preflight(max_workers: usize) -> Option<WoolPreflightGuard> {
+    let max_workers = max_workers.max(1);
+    let mut current = WOOL_PREFLIGHT_INFLIGHT.load(Ordering::Relaxed);
+    loop {
+        if current >= max_workers {
+            return None;
+        }
+        match WOOL_PREFLIGHT_INFLIGHT.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return Some(WoolPreflightGuard),
+            Err(next) => current = next,
+        }
     }
 }
 

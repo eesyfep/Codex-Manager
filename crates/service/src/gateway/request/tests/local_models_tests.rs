@@ -94,6 +94,66 @@ fn serialize_models_response_preserves_description_for_codex_clients() {
         models[0].get("description").and_then(Value::as_str),
         Some("Latest frontier agentic coding model.")
     );
+    assert_eq!(
+        models[0].get("shell_type").and_then(Value::as_str),
+        Some("shell_command")
+    );
+    assert_eq!(
+        models[0]
+            .get("truncation_policy")
+            .and_then(Value::as_object)
+            .and_then(|policy| policy.get("mode"))
+            .and_then(Value::as_str),
+        Some("tokens")
+    );
+}
+
+#[test]
+fn serialize_models_response_filters_hidden_and_non_api_models() {
+    let items = ModelsResponse {
+        models: vec![
+            ModelInfo {
+                slug: "mimo-v2.5-pro".to_string(),
+                display_name: "mimo-v2.5-pro".to_string(),
+                description: Some("Third-party visible model".to_string()),
+                supported_in_api: true,
+                visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "hidden-third-party".to_string(),
+                display_name: "hidden-third-party".to_string(),
+                supported_in_api: true,
+                visibility: Some("hide".to_string()),
+                ..Default::default()
+            },
+            ModelInfo {
+                slug: "disabled-third-party".to_string(),
+                display_name: "disabled-third-party".to_string(),
+                supported_in_api: false,
+                visibility: Some("list".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let output = serialize_models_response(&items);
+    let value: Value = serde_json::from_str(&output).expect("valid json");
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .expect("models array");
+
+    assert_eq!(models.len(), 2);
+    assert_eq!(
+        models[0].get("slug").and_then(Value::as_str),
+        Some("mimo-v2.5-pro")
+    );
+    assert_eq!(
+        models[1].get("slug").and_then(Value::as_str),
+        Some("gpt-image-2")
+    );
 }
 
 #[test]
@@ -139,4 +199,73 @@ fn models_etag_header_uses_extra_etag_value() {
 
     assert!(header.field.equiv("etag"));
     assert_eq!(header.value.as_str(), "\"remote-etag\"");
+}
+
+#[test]
+fn serialize_models_response_keeps_visible_third_party_models_with_codex_defaults() {
+    let items = ModelsResponse {
+        models: vec![ModelInfo {
+            slug: "mimo-v2.5-pro".to_string(),
+            display_name: "MiMo V2.5 Pro".to_string(),
+            description: Some("chat adapter route".to_string()),
+            supported_in_api: true,
+            visibility: Some("list".to_string()),
+            extra: std::collections::BTreeMap::from([(
+                "source_kind".to_string(),
+                serde_json::json!("remote"),
+            )]),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let output = serialize_models_response(&items);
+    let value: Value = serde_json::from_str(&output).expect("valid json");
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .expect("models array");
+
+    assert_eq!(
+        models[0].get("slug").and_then(Value::as_str),
+        Some("mimo-v2.5-pro")
+    );
+    assert_eq!(
+        models[0].get("source_kind").and_then(Value::as_str),
+        Some("remote")
+    );
+    assert_eq!(
+        models[0].get("supported_in_api").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        models[0]
+            .get("input_modalities")
+            .and_then(Value::as_array)
+            .map(|items| items.len()),
+        Some(2)
+    );
+    assert_eq!(
+        models[0].get("base_instructions").and_then(Value::as_str),
+        Some("You are Codex, a helpful AI assistant. Follow the user's instructions.")
+    );
+    assert_eq!(
+        models[0]
+            .get("model_messages")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("instructions_template"))
+            .and_then(Value::as_str),
+        Some("You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n{{personality}}\n")
+    );
+    assert_eq!(
+        models[0]
+            .get("model_messages")
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("instructions_variables"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("personality_pragmatic"))
+            .and_then(Value::as_str)
+            .map(|value| value.contains("deeply pragmatic, effective software engineer")),
+        Some(true)
+    );
 }

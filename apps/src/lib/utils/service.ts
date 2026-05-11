@@ -52,13 +52,13 @@ export function normalizeServiceAddr(raw: string): string {
   value = value.split("/")[0];
 
   if (/^\d+$/.test(value)) {
-    return `localhost:${value}`;
+    return `127.0.0.1:${value}`;
   }
 
   const [host, port] = value.split(":");
   if (!port) return value;
-  if (host === "127.0.0.1" || host === "0.0.0.0") {
-    return `localhost:${port}`;
+  if (host === "0.0.0.0") {
+    return `127.0.0.1:${port}`;
   }
   return value;
 }

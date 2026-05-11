@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use codexmanager_core::storage::now_ts;
 
 const DEFAULT_ACCOUNT_COOLDOWN_SECS: i64 = 20;
-const DEFAULT_ACCOUNT_COOLDOWN_NETWORK_SECS: i64 = DEFAULT_ACCOUNT_COOLDOWN_SECS;
+static ACCOUNT_DEFAULT_COOLDOWN_SECS: AtomicI64 = AtomicI64::new(DEFAULT_ACCOUNT_COOLDOWN_SECS);
 const DEFAULT_ACCOUNT_COOLDOWN_429_SECS: i64 = 45;
 const DEFAULT_ACCOUNT_COOLDOWN_5XX_SECS: i64 = 30;
 const DEFAULT_ACCOUNT_COOLDOWN_4XX_SECS: i64 = DEFAULT_ACCOUNT_COOLDOWN_SECS;
@@ -49,13 +50,23 @@ pub(super) enum CooldownReason {
 /// 返回函数执行结果
 fn cooldown_secs_for_reason(reason: CooldownReason) -> i64 {
     match reason {
-        CooldownReason::Default => DEFAULT_ACCOUNT_COOLDOWN_SECS,
-        CooldownReason::Network => DEFAULT_ACCOUNT_COOLDOWN_NETWORK_SECS,
+        CooldownReason::Default => current_account_default_cooldown_secs(),
+        CooldownReason::Network => current_account_default_cooldown_secs(),
         CooldownReason::RateLimited => DEFAULT_ACCOUNT_COOLDOWN_429_SECS,
         CooldownReason::Upstream5xx => DEFAULT_ACCOUNT_COOLDOWN_5XX_SECS,
         CooldownReason::Upstream4xx => DEFAULT_ACCOUNT_COOLDOWN_4XX_SECS,
         CooldownReason::Challenge => DEFAULT_ACCOUNT_COOLDOWN_CHALLENGE_SECS,
     }
+}
+
+pub(crate) fn current_account_default_cooldown_secs() -> i64 {
+    ACCOUNT_DEFAULT_COOLDOWN_SECS.load(Ordering::Relaxed).max(1)
+}
+
+pub(crate) fn set_account_default_cooldown_secs(seconds: i64) -> i64 {
+    let applied = seconds.max(1);
+    ACCOUNT_DEFAULT_COOLDOWN_SECS.store(applied, Ordering::Relaxed);
+    applied
 }
 
 /// 函数 `rate_limit_cooldown_secs_for_offense`

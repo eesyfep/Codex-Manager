@@ -8,7 +8,8 @@ const ENV_DB_PATH: &str = "CODEXMANAGER_DB_PATH";
 const ENV_RPC_TOKEN_FILE: &str = "CODEXMANAGER_RPC_TOKEN_FILE";
 const ENV_SERVICE_ADDR: &str = "CODEXMANAGER_SERVICE_ADDR";
 const QA_APP_IDENTIFIER: &str = "com.codexmanager.desktop.qa";
-const QA_DEFAULT_SERVICE_ADDR: &str = "localhost:48762";
+const ROUTER_DEV_APP_IDENTIFIER: &str = "com.codexmanager.desktop.router-dev";
+const QA_DEFAULT_SERVICE_ADDR: &str = "127.0.0.1:48762";
 
 /// 函数 `resolve_rpc_token_path_for_db`
 ///
@@ -172,7 +173,7 @@ pub(crate) fn apply_runtime_storage_env(app: &tauri::AppHandle) {
 fn profile_default_service_addr(identifier: &str) -> Option<&'static str> {
     let normalized = identifier.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        QA_APP_IDENTIFIER => Some(QA_DEFAULT_SERVICE_ADDR),
+        QA_APP_IDENTIFIER | ROUTER_DEV_APP_IDENTIFIER => Some(QA_DEFAULT_SERVICE_ADDR),
         _ => None,
     }
 }
@@ -194,11 +195,15 @@ fn should_seed_profile_service_addr(
     current_saved_addr: &str,
 ) -> Option<&'static str> {
     let profile_addr = profile_default_service_addr(identifier)?;
-    if current_saved_addr.eq_ignore_ascii_case(codexmanager_service::DEFAULT_ADDR) {
-        Some(profile_addr)
-    } else {
+    if current_saved_addr.eq_ignore_ascii_case(profile_addr) {
         None
+    } else {
+        Some(profile_addr)
     }
+}
+
+pub(crate) fn profile_service_addr_override(app: &tauri::AppHandle) -> Option<&'static str> {
+    profile_default_service_addr(app.config().identifier.as_str())
 }
 
 /// 函数 `maybe_seed_profile_service_addr`
@@ -342,6 +347,10 @@ mod tests {
             Some(QA_DEFAULT_SERVICE_ADDR)
         );
         assert_eq!(
+            profile_default_service_addr("com.codexmanager.desktop.router-dev"),
+            Some(QA_DEFAULT_SERVICE_ADDR)
+        );
+        assert_eq!(
             profile_default_service_addr(" COM.CODEXMANAGER.DESKTOP.QA "),
             Some(QA_DEFAULT_SERVICE_ADDR)
         );
@@ -363,7 +372,7 @@ mod tests {
     /// # 返回
     /// 无
     #[test]
-    fn profile_service_addr_migration_only_applies_to_legacy_default_port() {
+    fn profile_service_addr_migration_applies_to_dev_profiles() {
         assert_eq!(
             should_seed_profile_service_addr(
                 "com.codexmanager.desktop.qa",
@@ -372,12 +381,19 @@ mod tests {
             Some(QA_DEFAULT_SERVICE_ADDR)
         );
         assert_eq!(
-            should_seed_profile_service_addr("com.codexmanager.desktop.qa", "localhost:48762"),
+            should_seed_profile_service_addr(
+                "com.codexmanager.desktop.router-dev",
+                codexmanager_service::DEFAULT_ADDR
+            ),
+            Some(QA_DEFAULT_SERVICE_ADDR)
+        );
+        assert_eq!(
+            should_seed_profile_service_addr("com.codexmanager.desktop.qa", "127.0.0.1:48762"),
             None
         );
         assert_eq!(
             should_seed_profile_service_addr("com.codexmanager.desktop.qa", "localhost:4999"),
-            None
+            Some(QA_DEFAULT_SERVICE_ADDR)
         );
         assert_eq!(
             should_seed_profile_service_addr(
@@ -423,7 +439,8 @@ mod tests {
     #[test]
     fn runtime_rpc_token_path_prefers_env_relative_to_exe_dir() {
         let _guard = EnvGuard::set(ENV_RPC_TOKEN_FILE, Some("./data/custom.rpc-token"));
-        let db_path = PathBuf::from("C:/Users/test/AppData/Roaming/com.codexmanager.desktop/codexmanager.db");
+        let db_path =
+            PathBuf::from("C:/Users/test/AppData/Roaming/com.codexmanager.desktop/codexmanager.db");
         let expected = super::exe_dir().join("./data/custom.rpc-token");
         assert_eq!(resolve_runtime_rpc_token_path(&db_path), expected);
     }

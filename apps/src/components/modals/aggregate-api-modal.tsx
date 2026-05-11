@@ -33,19 +33,27 @@ import { AggregateApi } from "@/types";
 
 const AGGREGATE_API_PROVIDER_LABELS: Record<string, string> = {
   codex: "Codex",
+  azure_openai: "Azure OpenAI",
   claude: "Claude",
 };
 
 const AGGREGATE_API_URL_PLACEHOLDERS: Record<string, string> = {
   codex: "例如：https://api.openai.com/v1",
+  azure_openai: "例如：https://<resource>.openai.azure.com",
   claude: "例如：https://api.anthropic.com/v1",
 };
+
+const AZURE_OPENAI_ACTION_EXAMPLE =
+  "/openai/deployments/<deployment>/chat/completions?api-version=2024-10-21";
 
 interface AggregateApiModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   aggregateApi?: AggregateApi | null;
+  templateApi?: AggregateApi | null;
   defaultSort?: number;
+  defaultPool?: "primary" | "wool";
+  defaultSupplierName?: string;
 }
 
 /**
@@ -65,12 +73,18 @@ export function AggregateApiModal({
   open,
   onOpenChange,
   aggregateApi,
+  templateApi,
   defaultSort = 0,
+  defaultPool = "primary",
+  defaultSupplierName,
 }: AggregateApiModalProps) {
   const { t } = useI18n();
   const serviceStatus = useAppStore((state) => state.serviceStatus);
   const { canAccessManagementRpc } = useRuntimeCapabilities();
   const [providerType, setProviderType] = useState("codex");
+  const [pool, setPool] = useState<"primary" | "wool">("primary");
+  const [fast, setFast] = useState(false);
+  const [compatibilityMode, setCompatibilityMode] = useState(false);
   const [supplierName, setSupplierName] = useState("");
   const [sortDraft, setSortDraft] = useState("0");
   const [url, setUrl] = useState("");
@@ -103,17 +117,28 @@ export function AggregateApiModal({
 
   useEffect(() => {
     if (!open) return;
-    const nextProviderType = aggregateApi?.providerType || "codex";
+    const sourceApi = aggregateApi || templateApi || null;
+    const nextProviderType = sourceApi?.providerType || "codex";
     setProviderType(nextProviderType);
-    setSupplierName(aggregateApi?.supplierName || "");
+    const nextPool =
+      aggregateApi?.pool === "wool" || templateApi?.pool === "wool" || defaultPool === "wool"
+        ? "wool"
+        : "primary";
+    setPool(nextPool);
+    setFast(Boolean(sourceApi?.fast));
+    setCompatibilityMode(Boolean(sourceApi?.compatibilityMode));
+    setSupplierName(
+      aggregateApi?.supplierName ||
+        (defaultPool === "wool" ? defaultSupplierName || "" : ""),
+    );
     setSortDraft(String(aggregateApi?.sort ?? defaultSort));
-    setUrl(aggregateApi?.url || "");
+    setUrl(sourceApi?.url || "");
     const nextAuthType =
-      aggregateApi?.authType === "userpass" ? "userpass" : "apikey";
+      sourceApi?.authType === "userpass" ? "userpass" : "apikey";
     setAuthType(nextAuthType);
     const authParams =
-      aggregateApi?.authParams && typeof aggregateApi.authParams === "object"
-        ? aggregateApi.authParams
+      sourceApi?.authParams && typeof sourceApi.authParams === "object"
+        ? sourceApi.authParams
         : null;
     setAuthCustomEnabled(Boolean(authParams));
     if (nextAuthType === "apikey") {
@@ -151,14 +176,14 @@ export function AggregateApiModal({
           : "password"
       );
     }
-    const nextAction = aggregateApi?.action ?? "";
+    const nextAction = sourceApi?.action ?? "";
     setAction(nextAction);
-    setActionCustomEnabled(aggregateApi?.action !== null && aggregateApi?.action !== undefined);
+    setActionCustomEnabled(sourceApi?.action !== null && sourceApi?.action !== undefined);
     setKey("");
     setUsername("");
     setPassword("");
     setGeneratedKey("");
-  }, [aggregateApi, defaultSort, open]);
+  }, [aggregateApi, defaultPool, defaultSort, defaultSupplierName, open, templateApi]);
 
   /**
    * 函数 `handleSave`
@@ -277,6 +302,9 @@ export function AggregateApiModal({
           authParams,
           actionCustomEnabled,
           action: actionCustomEnabled ? action.trim() : null,
+          pool,
+          fast,
+          compatibilityMode,
           username: authType === "userpass" ? username.trim() || null : null,
           password: authType === "userpass" ? password.trim() || null : null,
         });
@@ -301,6 +329,9 @@ export function AggregateApiModal({
         authParams,
         actionCustomEnabled,
         action: actionCustomEnabled ? action.trim() : null,
+        pool,
+        fast,
+        compatibilityMode,
         username: authType === "userpass" ? username.trim() : null,
         password: authType === "userpass" ? password.trim() : null,
       });
@@ -343,11 +374,27 @@ export function AggregateApiModal({
     }
   };
 
+  const applyAzureOpenAiTemplate = () => {
+    setProviderType("azure_openai");
+    setAuthType("apikey");
+    setAuthCustomEnabled(true);
+    setApiKeyLocation("header");
+    setApiKeyName("api-key");
+    setApiKeyHeaderValueFormat("raw");
+    setActionCustomEnabled(true);
+    if (!action.trim()) {
+      setAction(AZURE_OPENAI_ACTION_EXAMPLE);
+    }
+    if (!url.trim()) {
+      setUrl("https://<resource>.openai.azure.com");
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="glass-card w-[calc(100%-2rem)] max-w-[calc(100%-2rem)] overflow-hidden border-none p-0 sm:max-w-[92vw] md:max-w-[640px] lg:max-w-[720px] xl:max-w-[760px]">
+      <DialogContent className="glass-card w-[calc(100%-2rem)] max-w-[calc(100%-2rem)] overflow-hidden border border-border p-0 sm:max-w-[92vw] md:max-w-[640px] lg:max-w-[720px] xl:max-w-[760px]">
         <div className="flex max-h-[92vh] flex-col">
-          <div className="border-b border-border/50 px-5 pt-5 pb-3">
+          <div className="border-b border-border px-5 pt-5 pb-3">
             <DialogHeader>
               <div className="mb-2 flex items-center gap-3">
                 <div className="rounded-full bg-primary/10 p-2">
@@ -358,7 +405,9 @@ export function AggregateApiModal({
                 </DialogTitle>
               </div>
               <DialogDescription>
-                {t("配置一个最小转发上游，保存 URL 和密钥后即可用于平台密钥轮转。")}
+                {pool === "wool"
+                  ? "配置短时效免费 API。保存后进入羊毛池，路由会优先尝试，失败或满载后回退主用池。"
+                  : t("配置一个最小转发上游，保存 URL 和密钥后即可用于平台密钥轮转。")}
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -366,7 +415,7 @@ export function AggregateApiModal({
           <div className="overflow-y-auto px-5 py-3">
             <div className="grid gap-4">
               {!isServiceReady ? (
-                <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
+                <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm text-muted-foreground">
                   {unavailableMessage}
                 </div>
               ) : null}
@@ -400,6 +449,67 @@ export function AggregateApiModal({
                 </div>
 
                 <div className="grid gap-2">
+                  <Label htmlFor="aggregate-api-pool">池类型</Label>
+                  <Select
+                    value={pool}
+                    disabled={!isServiceReady}
+                    onValueChange={(value) =>
+                      setPool(value === "wool" ? "wool" : "primary")
+                    }
+                  >
+                    <SelectTrigger id="aggregate-api-pool" className="w-full">
+                      <SelectValue>
+                        {(value) => (String(value || "") === "wool" ? "羊毛池" : "主用池")}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="primary">主用池</SelectItem>
+                      <SelectItem value="wool">羊毛池</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] leading-4 text-muted-foreground">
+                    羊毛池独立限流，满载或不可用时直接回退主用 API。
+                  </p>
+                </div>
+
+                <div className="grid gap-3 rounded-lg border border-border bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <Label htmlFor="aggregate-api-fast" className="text-sm">
+                        fast
+                      </Label>
+                      <p className="text-[11px] leading-4 text-muted-foreground">
+                        {t("开启后该聚合 API 使用 fast 服务等级。")}
+                      </p>
+                    </div>
+                    <Switch
+                      id="aggregate-api-fast"
+                      checked={fast}
+                      disabled={!isServiceReady}
+                      onCheckedChange={(checked) => setFast(Boolean(checked))}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+                    <div>
+                      <Label htmlFor="aggregate-api-compatibility-mode" className="text-sm">
+                        低质量中转兼容
+                      </Label>
+                      <p className="text-[11px] leading-4 text-muted-foreground">
+                        针对首帧慢、终态弱的中转站启用流式抗断流保护。
+                      </p>
+                    </div>
+                    <Switch
+                      id="aggregate-api-compatibility-mode"
+                      checked={compatibilityMode}
+                      disabled={!isServiceReady}
+                      onCheckedChange={(checked) =>
+                        setCompatibilityMode(Boolean(checked))
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
                   <Label htmlFor="aggregate-api-provider">{t("类型")}</Label>
                   <Select
                     value={providerType}
@@ -419,9 +529,20 @@ export function AggregateApiModal({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="codex">Codex</SelectItem>
+                      <SelectItem value="azure_openai">Azure OpenAI</SelectItem>
                       <SelectItem value="claude">Claude</SelectItem>
                     </SelectContent>
                   </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="justify-start"
+                    disabled={!isServiceReady}
+                    onClick={applyAzureOpenAiTemplate}
+                  >
+                    Azure OpenAI 模板
+                  </Button>
                 </div>
 
                 <div className="grid gap-2">
@@ -510,7 +631,7 @@ export function AggregateApiModal({
               )}
 
               <div className="grid gap-4 xl:grid-cols-2">
-                <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+                <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <Label className="text-sm">{t("自定义认证参数")}</Label>
@@ -661,7 +782,7 @@ export function AggregateApiModal({
                   ) : null}
                 </div>
 
-                <div className="grid gap-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+                <div className="grid gap-3 rounded-xl border border-border bg-muted/20 p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <Label className="text-sm">{t("自定义 action")}</Label>
@@ -715,7 +836,7 @@ export function AggregateApiModal({
             </div>
           </div>
 
-          <div className="border-t border-border/50 px-5 py-3">
+          <div className="border-t border-border px-5 py-3">
             <DialogFooter>
               {!generatedKey ? (
                 <DialogClose

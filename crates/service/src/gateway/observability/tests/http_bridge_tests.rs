@@ -734,6 +734,100 @@ fn chat_completions_reader_dedupes_partial_image_and_done_image() {
 }
 
 #[test]
+fn chat_completions_reader_synthesizes_final_chunk_on_eof_after_text_delta() {
+    let sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial answer\"}\n\n";
+    let response = open_mock_http_response("text/event-stream", sse);
+    let collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = ChatCompletionsFromResponsesSseReader::new(
+        response,
+        Arc::clone(&collector),
+        std::time::Instant::now(),
+    );
+    let mut out = String::new();
+    reader.read_to_string(&mut out).expect("read chat sse");
+
+    assert!(out.contains("\"content\":\"partial answer\""));
+    assert!(out.contains("\"finish_reason\":\"stop\""));
+    assert!(out.contains("data: [DONE]"));
+    let collector = collector.lock().expect("collector lock");
+    assert!(collector.saw_terminal);
+}
+
+#[test]
+fn chat_completions_reader_synthesizes_final_chunk_on_disconnect_after_partial_image() {
+    let sse = "data: {\"type\":\"response.image_generation_call.partial_image\",\"item_id\":\"ig_partial\",\"output_format\":\"png\",\"partial_image_b64\":\"aGVsbG8=\",\"partial_image_index\":0}\n\n";
+    let response = open_mock_http_response("text/event-stream", sse);
+    let collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = ChatCompletionsFromResponsesSseReader::new(
+        response,
+        Arc::clone(&collector),
+        std::time::Instant::now(),
+    );
+    let mut out = String::new();
+    reader.read_to_string(&mut out).expect("read chat sse");
+
+    assert!(out.contains("\"images\""));
+    assert!(out.contains("data:image/png;base64,aGVsbG8="));
+    assert!(out.contains("\"finish_reason\":\"stop\""));
+    assert!(out.contains("data: [DONE]"));
+    let collector = collector.lock().expect("collector lock");
+    assert!(collector.saw_terminal);
+}
+
+#[test]
+fn chat_completions_reader_emits_tool_call_chunk_from_completed_response_output() {
+    let sse = concat!(
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_tool_completed_1\",\"model\":\"mimo-v2.5-pro\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"id\":\"fc_tool_completed_1\",\"call_id\":\"call_tool_completed_1\",\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}]}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let response = open_mock_http_response("text/event-stream", sse);
+    let collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = ChatCompletionsFromResponsesSseReader::new(
+        response,
+        Arc::clone(&collector),
+        std::time::Instant::now(),
+    );
+    let mut out = String::new();
+    reader.read_to_string(&mut out).expect("read chat sse");
+
+    println!("{out}");
+    assert!(out.contains("\"tool_calls\""));
+    assert!(out.contains("\"id\":\"call_tool_completed_1\""));
+    assert!(out.contains("\"name\":\"read_file\""));
+    assert!(out.contains("\"finish_reason\":\"tool_calls\""));
+    assert!(out.contains("data: [DONE]"));
+    let collector = collector.lock().expect("collector lock");
+    assert!(collector.saw_terminal);
+}
+
+#[test]
+fn chat_completions_reader_synthesizes_tool_call_chunk_on_disconnect_after_partial_function_call() {
+    let sse = concat!(
+        "data: {\"type\":\"response.output_item.added\",\"response_id\":\"resp_tool_partial_1\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_tool_partial_1\",\"call_id\":\"call_tool_partial_1\",\"name\":\"read_file\"}}\n\n",
+        "data: {\"type\":\"response.function_call_arguments.delta\",\"response_id\":\"resp_tool_partial_1\",\"output_index\":0,\"item_id\":\"fc_tool_partial_1\",\"call_id\":\"call_tool_partial_1\",\"delta\":\"{\\\"path\\\":\\\"README.md\\\"}\"}\n\n"
+    );
+    let response = open_mock_http_response("text/event-stream", sse);
+    let collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = ChatCompletionsFromResponsesSseReader::new(
+        response,
+        Arc::clone(&collector),
+        std::time::Instant::now(),
+    );
+    let mut out = String::new();
+    reader.read_to_string(&mut out).expect("read chat sse");
+
+    assert!(out.contains("\"tool_calls\""));
+    assert!(out.contains("\"id\":\"call_tool_partial_1\""));
+    assert!(out.contains("\"name\":\"read_file\""));
+    assert!(out.contains("\"arguments\""));
+    assert!(out.contains("README.md"));
+    assert!(out.contains("\"finish_reason\":\"tool_calls\""));
+    assert!(out.contains("data: [DONE]"));
+    let collector = collector.lock().expect("collector lock");
+    assert!(collector.saw_terminal);
+}
+
+#[test]
 fn images_reader_streams_partial_and_completed_events() {
     let sse = concat!(
         "data: {\"type\":\"response.image_generation_call.partial_image\",\"item_id\":\"ig_1\",\"output_format\":\"png\",\"partial_image_b64\":\"cGFydGlhbA==\",\"partial_image_index\":0}\n\n",
@@ -1896,6 +1990,200 @@ fn openai_responses_passthrough_reader_passthroughs_raw_sse_without_keepalive_in
 }
 
 #[test]
+fn openai_responses_passthrough_reader_finishes_after_terminal_without_waiting_for_slow_tail() {
+    let (upstream, server) = open_streaming_mock_http_response(
+        "text/event-stream",
+        &[
+            (
+                "event: response.created\n\
+                 data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_terminal_fast\"}}\n\n",
+                0,
+            ),
+            (
+                "event: response.completed\n\
+                 data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_terminal_fast\"}}\n\n",
+                0,
+            ),
+            (
+                "event: response.output_text.delta\n\
+                 data: {\"type\":\"response.output_text.delta\",\"delta\":\"late\"}\n\n",
+                1200,
+            ),
+        ],
+    );
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = OpenAIResponsesPassthroughSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        SseKeepAliveFrame::OpenAIResponses,
+        std::time::Instant::now(),
+    );
+
+    let started = std::time::Instant::now();
+    let mut mapped = String::new();
+    reader
+        .read_to_string(&mut mapped)
+        .expect("read terminal openai responses passthrough sse");
+    let elapsed = started.elapsed();
+
+    server
+        .join()
+        .expect("join terminal openai responses slow-tail upstream");
+
+    let collector = usage_collector
+        .lock()
+        .expect("lock usage collector")
+        .clone();
+    assert!(
+        elapsed < Duration::from_millis(800),
+        "reader waited for slow tail after terminal: {elapsed:?}"
+    );
+    assert!(mapped.contains("event: response.completed"));
+    assert!(!mapped.contains("\"delta\":\"late\""));
+    assert!(collector.saw_terminal);
+    assert_eq!(
+        collector.last_event_type.as_deref(),
+        Some("response.completed")
+    );
+}
+
+#[test]
+fn openai_responses_passthrough_reader_emits_handshake_before_slow_first_frame() {
+    let _guard = crate::test_env_guard();
+    let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "15");
+    super::reload_from_env();
+
+    let (upstream, server) = open_streaming_mock_http_response(
+        "text/event-stream",
+        &[(
+            "event: response.completed\n\
+             data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_slow_first\"}}\n\n",
+            120,
+        )],
+    );
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = OpenAIResponsesPassthroughSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        SseKeepAliveFrame::OpenAIResponses,
+        std::time::Instant::now(),
+    );
+
+    let mut first = vec![0_u8; 4096];
+    let read = reader
+        .read(&mut first)
+        .expect("read synthetic openai responses handshake");
+    let first = String::from_utf8_lossy(&first[..read]);
+    assert!(first.contains("event: response.created"));
+    assert!(first.contains("event: response.in_progress"));
+    assert!(!first.contains("event: response.completed"));
+
+    let mut rest = String::new();
+    reader
+        .read_to_string(&mut rest)
+        .expect("read slow first upstream terminal");
+    server.join().expect("join slow first upstream");
+    super::reload_from_env();
+
+    assert!(rest.contains("event: response.completed"));
+    let collector = usage_collector
+        .lock()
+        .expect("lock usage collector")
+        .clone();
+    assert!(collector.saw_terminal);
+    assert_eq!(
+        collector.last_event_type.as_deref(),
+        Some("response.completed")
+    );
+}
+
+#[test]
+fn openai_responses_passthrough_reader_emits_failed_terminal_after_empty_upstream_disconnect() {
+    let (upstream, server) = open_streaming_mock_http_response("text/event-stream", &[]);
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = OpenAIResponsesPassthroughSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        SseKeepAliveFrame::OpenAIResponses,
+        std::time::Instant::now(),
+    );
+    let mut mapped = String::new();
+    reader
+        .read_to_string(&mut mapped)
+        .expect("read failed openai responses terminal");
+    server.join().expect("join empty upstream");
+
+    assert!(mapped.contains("event: response.created"));
+    assert!(mapped.contains("event: response.in_progress"));
+    assert!(mapped.contains("event: response.failed"));
+    let collector = usage_collector
+        .lock()
+        .expect("lock usage collector")
+        .clone();
+    assert!(collector.saw_terminal);
+    assert_eq!(
+        collector.last_event_type.as_deref(),
+        Some("response.failed")
+    );
+    assert!(collector.terminal_error.is_some());
+}
+
+#[test]
+fn openai_responses_passthrough_reader_fails_after_compat_handshake_timeout() {
+    let _guard = crate::test_env_guard();
+    let _keepalive_guard = EnvGuard::set("CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS", "10");
+    super::reload_from_env();
+
+    let (upstream, server) = open_streaming_mock_http_response(
+        "text/event-stream",
+        &[(
+            "event: response.completed\n\
+             data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_too_late\"}}\n\n",
+            250,
+        )],
+    );
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = OpenAIResponsesPassthroughSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        SseKeepAliveFrame::OpenAIResponses,
+        std::time::Instant::now(),
+    )
+    .with_no_upstream_after_handshake_timeout(Some(Duration::from_millis(40)));
+
+    let started = std::time::Instant::now();
+    let mut mapped = String::new();
+    reader
+        .read_to_string(&mut mapped)
+        .expect("read compat timeout failed terminal");
+    let elapsed = started.elapsed();
+    server.join().expect("join too-late upstream");
+    super::reload_from_env();
+
+    assert!(
+        elapsed < Duration::from_millis(180),
+        "reader waited too long after compat handshake timeout: {elapsed:?}"
+    );
+    assert!(mapped.contains("event: response.created"));
+    assert!(mapped.contains("event: response.in_progress"));
+    assert!(mapped.contains("event: response.failed"));
+    assert!(!mapped.contains("resp_too_late"));
+    let collector = usage_collector
+        .lock()
+        .expect("lock usage collector")
+        .clone();
+    assert!(collector.saw_terminal);
+    assert_eq!(
+        collector.last_event_type.as_deref(),
+        Some("response.failed")
+    );
+    assert_eq!(
+        collector.terminal_error.as_deref(),
+        Some("低质量中转兼容模式：上游首帧等待超时")
+    );
+}
+
+#[test]
 fn openai_responses_passthrough_reader_parses_split_events_with_eventsource_stream() {
     let (upstream, server) = open_streaming_mock_http_response(
         "text/event-stream",
@@ -2180,6 +2468,54 @@ fn responses_from_chat_completions_reader_emits_full_responses_lifecycle_contrac
     assert_eq!(collector.usage.input_tokens, Some(4));
     assert_eq!(collector.usage.output_tokens, Some(6));
     assert_eq!(collector.usage.total_tokens, Some(10));
+}
+
+#[test]
+fn responses_from_chat_completions_reader_defers_message_item_until_text_delta() {
+    let (upstream, server) = open_streaming_mock_http_response(
+        "text/event-stream",
+        &[(
+            "data: {\"id\":\"chatcmpl_tool_only_1\",\"object\":\"chat.completion.chunk\",\"created\":1775900400,\"model\":\"mimo-v2.5-pro\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_tool_only_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+             data: {\"id\":\"chatcmpl_tool_only_1\",\"object\":\"chat.completion.chunk\",\"created\":1775900400,\"model\":\"mimo-v2.5-pro\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1,\"total_tokens\":3}}\n\n\
+             data: [DONE]\n\n",
+            0,
+        )],
+    );
+    let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+    let mut reader = ResponsesFromChatCompletionsSseReader::new(
+        upstream,
+        Arc::clone(&usage_collector),
+        std::time::Instant::now(),
+    );
+    let mut mapped = String::new();
+    reader
+        .read_to_string(&mut mapped)
+        .expect("read tool-only responses-from-chat lifecycle");
+    server.join().expect("join tool-only upstream");
+
+    let events = mapped
+        .split("\n\n")
+        .filter_map(|frame| frame.lines().find_map(|line| line.strip_prefix("event: ")))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events,
+        vec![
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+            "response.completed",
+        ]
+    );
+    assert!(!mapped.contains("response.content_part.added"));
+    assert!(!mapped.contains("response.output_text.delta"));
+    assert!(!mapped.contains("response.output_text.done"));
+    assert!(mapped.contains("\"type\":\"function_call\""));
+    assert!(mapped.contains("\"call_id\":\"call_tool_only_1\""));
+    assert!(mapped.contains("\"model\":\"mimo-v2.5-pro\""));
+    assert!(mapped.contains("\"total_tokens\":3"));
 }
 
 /// 函数 `passthrough_sse_reader_captures_raw_html_error_body`

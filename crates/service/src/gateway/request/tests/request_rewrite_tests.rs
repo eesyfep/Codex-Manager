@@ -276,6 +276,65 @@ fn chat_completions_accepts_responses_style_payload() {
     );
 }
 
+#[test]
+fn chat_completions_preserves_reasoning_history_in_assistant_message() {
+    let body = json!({
+        "model": "mimo-v2.5-pro",
+        "input": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "reasoning",
+                        "summary": [
+                            { "type": "summary_text", "text": "先检查目录。" }
+                        ]
+                    },
+                    { "type": "output_text", "text": "我来看看项目结构。" }
+                ]
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "done"
+            }
+        ]
+    });
+    let out = apply_request_overrides(
+        "/v1/chat/completions",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        None,
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+    assert_eq!(
+        value
+            .get("messages")
+            .and_then(|v| v.get(0))
+            .and_then(|v| v.get("role"))
+            .and_then(serde_json::Value::as_str),
+        Some("assistant")
+    );
+    assert_eq!(
+        value
+            .get("messages")
+            .and_then(|v| v.get(0))
+            .and_then(|v| v.get("content"))
+            .and_then(serde_json::Value::as_str),
+        Some("<think>先检查目录。</think>\n我来看看项目结构。")
+    );
+    assert_eq!(
+        value
+            .get("messages")
+            .and_then(|v| v.get(1))
+            .and_then(|v| v.get("role"))
+            .and_then(serde_json::Value::as_str),
+        Some("tool")
+    );
+}
+
 /// 函数 `chat_completions_normalizes_responses_function_tools`
 ///
 /// 作者: gaohongshun
@@ -287,6 +346,56 @@ fn chat_completions_accepts_responses_style_payload() {
 ///
 /// # 返回
 /// 无
+#[test]
+fn chat_completions_preserves_function_call_and_tool_output_history() {
+    let body = json!({
+        "model": "glm-5.1",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_readme_1",
+                "name": "read_file",
+                "arguments": "{\"path\":\"AGENTS.md\"}"
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_readme_1",
+                "output": "file content"
+            }
+        ]
+    });
+    let out = apply_request_overrides(
+        "/v1/chat/completions",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        None,
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+    assert_eq!(value["messages"][0]["role"].as_str(), Some("assistant"));
+    assert_eq!(
+        value["messages"][0]["tool_calls"][0]["id"].as_str(),
+        Some("call_readme_1")
+    );
+    assert_eq!(
+        value["messages"][0]["tool_calls"][0]["function"]["name"].as_str(),
+        Some("read_file")
+    );
+    assert_eq!(
+        value["messages"][0]["tool_calls"][0]["function"]["arguments"].as_str(),
+        Some("{\"path\":\"AGENTS.md\"}")
+    );
+    assert_eq!(value["messages"][1]["role"].as_str(), Some("tool"));
+    assert_eq!(
+        value["messages"][1]["tool_call_id"].as_str(),
+        Some("call_readme_1")
+    );
+    assert_eq!(
+        value["messages"][1]["content"].as_str(),
+        Some("file content")
+    );
+}
+
 #[test]
 fn chat_completions_normalizes_responses_function_tools() {
     let body = json!({
@@ -323,6 +432,57 @@ fn chat_completions_normalizes_responses_function_tools() {
             .and_then(serde_json::Value::as_str),
         Some("ping")
     );
+    assert_eq!(
+        value
+            .get("tool_choice")
+            .and_then(|v| v.get("function"))
+            .and_then(|v| v.get("name"))
+            .and_then(serde_json::Value::as_str),
+        Some("ping")
+    );
+}
+
+#[test]
+fn chat_completions_drops_non_function_tools_and_keeps_function_tools() {
+    let body = json!({
+        "model": "gpt-4.1",
+        "input": "ping",
+        "tools": [
+            {
+                "type": "function",
+                "name": "ping",
+                "parameters": { "type": "object", "properties": {} }
+            },
+            {
+                "type": "web_search"
+            }
+        ],
+        "tool_choice": {
+            "type": "function",
+            "name": "ping"
+        }
+    });
+    let out = apply_request_overrides(
+        "/v1/chat/completions",
+        serde_json::to_vec(&body).expect("serialize request body"),
+        None,
+        None,
+        None,
+    );
+    let value: serde_json::Value = serde_json::from_slice(&out).expect("parse output body");
+    let tools = value
+        .get("tools")
+        .and_then(serde_json::Value::as_array)
+        .expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(
+        tools[0]
+            .get("function")
+            .and_then(|v| v.get("name"))
+            .and_then(serde_json::Value::as_str),
+        Some("ping")
+    );
+    assert!(tools[0].get("name").is_none());
     assert_eq!(
         value
             .get("tool_choice")

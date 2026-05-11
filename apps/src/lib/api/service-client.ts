@@ -47,6 +47,9 @@ export const serviceClient = {
       requestLogLimit?: number;
       dayStartTs?: number;
       dayEndTs?: number;
+      includeApiModels?: boolean;
+      includeRequestLogs?: boolean;
+      includeDashboardUsage?: boolean;
     }
   ): Promise<StartupSnapshot> {
     const result = await invoke<unknown>(

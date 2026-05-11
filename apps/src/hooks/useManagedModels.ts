@@ -145,13 +145,26 @@ export function useManagedModels() {
   const refreshMutation = useMutation({
     mutationFn: (refreshRemote: boolean) => accountClient.listManagedModels(refreshRemote),
     onSuccess: async (catalog) => {
+      const previousCatalog = queryClient.getQueryData<ManagedModelCatalog>(
+        MANAGED_MODEL_QUERY_KEY,
+      );
+      const previousSlugs = new Set(
+        (previousCatalog?.items || []).map((item) => item.slug),
+      );
+      const nextItems = catalog.items || [];
+      const addedCount = nextItems.filter((item) => !previousSlugs.has(item.slug)).length;
       queryClient.setQueryData(MANAGED_MODEL_QUERY_KEY, catalog);
       const cacheSyncError = await syncCatalogToCodexCache(catalog);
       await invalidateAll();
       if (cacheSyncError) {
         toast.error(`${t("模型目录已刷新，但同步 Codex 模型缓存失败")}: ${cacheSyncError}`);
       } else {
-        toast.success(t("模型目录已刷新"));
+        toast.success(
+          t("模型目录已刷新：当前 {total} 个，新增 {added} 个", {
+            total: nextItems.length,
+            added: addedCount,
+          }),
+        );
       }
     },
     onError: (error: unknown) => {

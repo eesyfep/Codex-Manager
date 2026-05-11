@@ -20,6 +20,13 @@ static UPSTREAM_CONNECT_TIMEOUT_SECS: AtomicU64 =
 static UPSTREAM_TOTAL_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS);
 static UPSTREAM_STREAM_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS);
 static ACCOUNT_MAX_INFLIGHT: AtomicUsize = AtomicUsize::new(DEFAULT_ACCOUNT_MAX_INFLIGHT);
+static WOOL_ENABLED: AtomicBool = AtomicBool::new(DEFAULT_WOOL_ENABLED);
+static WOOL_MAX_INFLIGHT_PER_API: AtomicUsize = AtomicUsize::new(DEFAULT_WOOL_MAX_INFLIGHT_PER_API);
+static WOOL_POOL_MAX_INFLIGHT: AtomicUsize = AtomicUsize::new(DEFAULT_WOOL_POOL_MAX_INFLIGHT);
+static WOOL_PREFLIGHT_WORKERS: AtomicUsize = AtomicUsize::new(DEFAULT_WOOL_PREFLIGHT_WORKERS);
+static WOOL_COOLDOWN_SECONDS: AtomicU64 = AtomicU64::new(DEFAULT_WOOL_COOLDOWN_SECONDS);
+static WOOL_PREFLIGHT_TTL_SECONDS: AtomicU64 = AtomicU64::new(DEFAULT_WOOL_PREFLIGHT_TTL_SECONDS);
+static WOOL_FAILURE_THRESHOLD: AtomicUsize = AtomicUsize::new(DEFAULT_WOOL_FAILURE_THRESHOLD);
 static STRICT_REQUEST_PARAM_ALLOWLIST: AtomicBool =
     AtomicBool::new(DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST);
 static ENABLE_REQUEST_COMPRESSION: AtomicBool = AtomicBool::new(DEFAULT_ENABLE_REQUEST_COMPRESSION);
@@ -43,6 +50,13 @@ const DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS: u64 = 0;
 const DEFAULT_UPSTREAM_STREAM_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_ACCOUNT_MAX_INFLIGHT: usize = 0;
+const DEFAULT_WOOL_ENABLED: bool = true;
+const DEFAULT_WOOL_MAX_INFLIGHT_PER_API: usize = 2;
+const DEFAULT_WOOL_POOL_MAX_INFLIGHT: usize = 6;
+const DEFAULT_WOOL_PREFLIGHT_WORKERS: usize = 3;
+const DEFAULT_WOOL_COOLDOWN_SECONDS: u64 = 600;
+const DEFAULT_WOOL_PREFLIGHT_TTL_SECONDS: u64 = 300;
+const DEFAULT_WOOL_FAILURE_THRESHOLD: usize = 1;
 const DEFAULT_STRICT_REQUEST_PARAM_ALLOWLIST: bool = false;
 const DEFAULT_ENABLE_REQUEST_COMPRESSION: bool = true;
 const DEFAULT_CODEX_IMAGE_GENERATION_ENABLED: bool = true;
@@ -64,6 +78,13 @@ const ENV_UPSTREAM_CONNECT_TIMEOUT_SECS: &str = "CODEXMANAGER_UPSTREAM_CONNECT_T
 const ENV_UPSTREAM_TOTAL_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS";
 const ENV_UPSTREAM_STREAM_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS";
 const ENV_ACCOUNT_MAX_INFLIGHT: &str = "CODEXMANAGER_ACCOUNT_MAX_INFLIGHT";
+const ENV_WOOL_ENABLED: &str = "CODEXMANAGER_WOOL_ENABLED";
+const ENV_WOOL_MAX_INFLIGHT_PER_API: &str = "CODEXMANAGER_WOOL_MAX_INFLIGHT_PER_API";
+const ENV_WOOL_POOL_MAX_INFLIGHT: &str = "CODEXMANAGER_WOOL_POOL_MAX_INFLIGHT";
+const ENV_WOOL_PREFLIGHT_WORKERS: &str = "CODEXMANAGER_WOOL_PREFLIGHT_WORKERS";
+const ENV_WOOL_COOLDOWN_SECONDS: &str = "CODEXMANAGER_WOOL_COOLDOWN_SECONDS";
+const ENV_WOOL_PREFLIGHT_TTL_SECONDS: &str = "CODEXMANAGER_WOOL_PREFLIGHT_TTL_SECONDS";
+const ENV_WOOL_FAILURE_THRESHOLD: &str = "CODEXMANAGER_WOOL_FAILURE_THRESHOLD";
 const ENV_STRICT_REQUEST_PARAM_ALLOWLIST: &str = "CODEXMANAGER_STRICT_REQUEST_PARAM_ALLOWLIST";
 const ENV_ENABLE_REQUEST_COMPRESSION: &str = "CODEXMANAGER_ENABLE_REQUEST_COMPRESSION";
 const ENV_CODEX_IMAGE_GENERATION_ENABLED: &str = "CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED";
@@ -456,6 +477,96 @@ pub(crate) fn set_account_max_inflight_limit(limit: usize) -> usize {
     ACCOUNT_MAX_INFLIGHT.store(limit, Ordering::Relaxed);
     std::env::set_var(ENV_ACCOUNT_MAX_INFLIGHT, limit.to_string());
     limit
+}
+
+pub(crate) fn wool_enabled() -> bool {
+    ensure_runtime_config_loaded();
+    WOOL_ENABLED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_enabled(enabled: bool) -> bool {
+    ensure_runtime_config_loaded();
+    WOOL_ENABLED.store(enabled, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_ENABLED, if enabled { "1" } else { "0" });
+    enabled
+}
+
+pub(crate) fn wool_max_inflight_per_api() -> usize {
+    ensure_runtime_config_loaded();
+    WOOL_MAX_INFLIGHT_PER_API.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_max_inflight_per_api(limit: usize) -> usize {
+    ensure_runtime_config_loaded();
+    let applied = limit.max(1);
+    WOOL_MAX_INFLIGHT_PER_API.store(applied, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_MAX_INFLIGHT_PER_API, applied.to_string());
+    applied
+}
+
+pub(crate) fn wool_pool_max_inflight() -> usize {
+    ensure_runtime_config_loaded();
+    WOOL_POOL_MAX_INFLIGHT.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_pool_max_inflight(limit: usize) -> usize {
+    ensure_runtime_config_loaded();
+    let applied = limit.max(1);
+    WOOL_POOL_MAX_INFLIGHT.store(applied, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_POOL_MAX_INFLIGHT, applied.to_string());
+    applied
+}
+
+pub(crate) fn wool_preflight_workers() -> usize {
+    ensure_runtime_config_loaded();
+    WOOL_PREFLIGHT_WORKERS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_preflight_workers(workers: usize) -> usize {
+    ensure_runtime_config_loaded();
+    let applied = workers.max(1);
+    WOOL_PREFLIGHT_WORKERS.store(applied, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_PREFLIGHT_WORKERS, applied.to_string());
+    applied
+}
+
+pub(crate) fn wool_cooldown_seconds() -> u64 {
+    ensure_runtime_config_loaded();
+    WOOL_COOLDOWN_SECONDS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_cooldown_seconds(seconds: u64) -> u64 {
+    ensure_runtime_config_loaded();
+    let applied = seconds.max(1);
+    WOOL_COOLDOWN_SECONDS.store(applied, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_COOLDOWN_SECONDS, applied.to_string());
+    applied
+}
+
+pub(crate) fn wool_preflight_ttl_seconds() -> u64 {
+    ensure_runtime_config_loaded();
+    WOOL_PREFLIGHT_TTL_SECONDS.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_preflight_ttl_seconds(seconds: u64) -> u64 {
+    ensure_runtime_config_loaded();
+    let applied = seconds.max(1);
+    WOOL_PREFLIGHT_TTL_SECONDS.store(applied, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_PREFLIGHT_TTL_SECONDS, applied.to_string());
+    applied
+}
+
+pub(crate) fn wool_failure_threshold() -> usize {
+    ensure_runtime_config_loaded();
+    WOOL_FAILURE_THRESHOLD.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wool_failure_threshold(threshold: usize) -> usize {
+    ensure_runtime_config_loaded();
+    let applied = threshold.max(1);
+    WOOL_FAILURE_THRESHOLD.store(applied, Ordering::Relaxed);
+    std::env::set_var(ENV_WOOL_FAILURE_THRESHOLD, applied.to_string());
+    applied
 }
 
 /// 函数 `strict_request_param_allowlist_enabled`
@@ -1021,6 +1132,42 @@ pub(super) fn reload_from_env() {
     );
     ACCOUNT_MAX_INFLIGHT.store(
         env_usize_or(ENV_ACCOUNT_MAX_INFLIGHT, DEFAULT_ACCOUNT_MAX_INFLIGHT),
+        Ordering::Relaxed,
+    );
+    WOOL_ENABLED.store(
+        env_bool_or(ENV_WOOL_ENABLED, DEFAULT_WOOL_ENABLED),
+        Ordering::Relaxed,
+    );
+    WOOL_MAX_INFLIGHT_PER_API.store(
+        env_usize_or(
+            ENV_WOOL_MAX_INFLIGHT_PER_API,
+            DEFAULT_WOOL_MAX_INFLIGHT_PER_API,
+        )
+        .max(1),
+        Ordering::Relaxed,
+    );
+    WOOL_POOL_MAX_INFLIGHT.store(
+        env_usize_or(ENV_WOOL_POOL_MAX_INFLIGHT, DEFAULT_WOOL_POOL_MAX_INFLIGHT).max(1),
+        Ordering::Relaxed,
+    );
+    WOOL_PREFLIGHT_WORKERS.store(
+        env_usize_or(ENV_WOOL_PREFLIGHT_WORKERS, DEFAULT_WOOL_PREFLIGHT_WORKERS).max(1),
+        Ordering::Relaxed,
+    );
+    WOOL_COOLDOWN_SECONDS.store(
+        env_u64_or(ENV_WOOL_COOLDOWN_SECONDS, DEFAULT_WOOL_COOLDOWN_SECONDS).max(1),
+        Ordering::Relaxed,
+    );
+    WOOL_PREFLIGHT_TTL_SECONDS.store(
+        env_u64_or(
+            ENV_WOOL_PREFLIGHT_TTL_SECONDS,
+            DEFAULT_WOOL_PREFLIGHT_TTL_SECONDS,
+        )
+        .max(1),
+        Ordering::Relaxed,
+    );
+    WOOL_FAILURE_THRESHOLD.store(
+        env_usize_or(ENV_WOOL_FAILURE_THRESHOLD, DEFAULT_WOOL_FAILURE_THRESHOLD).max(1),
         Ordering::Relaxed,
     );
     STRICT_REQUEST_PARAM_ALLOWLIST.store(
