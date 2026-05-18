@@ -16,10 +16,6 @@
 <p align="center"><strong>本地桌面端 + 服务进程的 Codex 账号池管理器</strong></p>
 <p align="center">统一管理账号、用量与平台 Key，并提供本地网关能力。</p>
 
-## 当前 fork 定位
-
-这是 `eesyfep/Codex-Manager` fork 的维护版本，项目首页只展示当前 fork 的功能增量、运行入口和更新记录。原作者赞助、收款码、社群推广和个人说明已从本 README 移除；上游来源仅保留为仓库链接，便于追溯代码来源。
-
 ## 来源
 
 本 fork 基于公开项目继续维护。来源仅保留 GitHub 仓库链接：<https://github.com/qxcnm/Codex-Manager>。
