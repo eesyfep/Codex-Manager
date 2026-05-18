@@ -6,15 +6,68 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 ## [Unreleased]
 
 ### Added
-- Added Codex image-generation compatibility: `/v1/responses` now auto-injects the official `image_generation` tool by default to match Codex behavior, explicit tools are forwarded unchanged, and compatible `/v1/images/generations` plus `/v1/images/edits` endpoints are available with `gpt-image-2` as the default image tool model.
+- Added Codex image-generation compatibility: the official `image_generation` tool is forwarded, and compatible `/v1/images/generations` plus `/v1/images/edits` endpoints are available with `gpt-image-2` as the default image tool model.
 - Added an `auth.json` step to the Codex CLI first-time setup guide, clarifying how the platform key, `auth.json`, and `config.toml` fit together.
+- Added request-log `tool_schema_events_json` so Claude Code / Anthropic SSE / aggregate output bridges can record redacted tool-schema validation summaries, including normalized tool names, schema source, validation status, required fields, normalized fields, and blocking reasons for GPT-path `H.command` diagnostics.
+- Added request-log `tool_search_mode` so ToolSearch / `dynamic_tools` degradation to upfront tools is recorded and shown as `degraded_to_upfront_tools` when the proxy chain cannot preserve `tool_reference`.
+- Added a Codex App model-visibility diagnostics tab in the model router. It compares the raw catalog, App-visible projection, current platform key `/v1/models` output, binding state, and target model hits.
+- Added an explicit "Enable model catalog" repair action in the model-router App diagnostics tab. It validates the local `model-catalog.codexmanager.json`, backs up `config.toml`, and writes a single top-level `model_catalog_json` entry so Codex App picker can see third-party models again.
 
 ### Fixed
+- Fixed model-router fallback chain: when an aggregate API previously used by a session is disabled (`status=disabled`) and was the only `success`-capability source for that model, the router used to return an empty candidate list and the request would 4xx with `failed_no_candidate`. A new `fallback_candidates` tier now falls back to all active aggregate APIs within the same partition, with `event=model_router_fallback_to_active_pool reason=bound_apis_disabled` logged for tracing.
+- Fixed frontend/backend pricing normalization drift: `~xxx-latest` alias entries from the OpenRouter snapshot are no longer indexed first (so specific versions such as `claude-sonnet-4.6` win); `mimo-v2.5-pro` is no longer collapsed into `mimo-v2.5` by the frontend normalizer; `qwen-plus-*` is no longer normalized to `qwen-max` on the backend and a `qwen-plus` price entry was added to match the frontend table.
+- Fixed ToolSearch degradation being invisible in diagnostics. `dynamic_tools` / `dynamicTools` now expand into `tools`, and the degradation mode is carried through SQLite, RPC summaries, and the request-log type/method/path tooltip for Claude Code/GPT tool-chain debugging.
+- Fixed third-party model pricing silently showing as zero. DeepSeek, Kimi, Qwen, Claude, and related backend estimates now align with the frontend pricing table, while GLM, MiMo, and unknown models return an unknown-pricing status instead of a misleading zero cost.
+- Fixed the default-model probe controls in the model router. The default-model availability board now has per-model and bulk probe buttons that call the real `modelRouter/probe/quickCall` RPC and show attempted upstreams, supplier, profile, URL summary, and failed profiles.
+- Fixed a Claude Code crash risk on GPT / Codex model paths where Anthropic SSE bridging could emit an empty `tool_use.input` for command tools and trigger `undefined is not an object (evaluating 'H.command')`. Command-like tools now preserve arguments and backfill `command`.
+- Fixed missing Claude / MiMo / DeepSeek thinking-history replay. Anthropic `thinking` / `redacted_thinking` history now maps to Responses reasoning items, Responses-to-Chat-Completions rewrites map reasoning signatures back to assistant `reasoning_content`, and thinking-mode assistant tool-call history gets an empty-string `reasoning_content` fallback when missing.
+- Added same-candidate Aggregate API fallback for reasoning HTTP 400 errors. When an upstream explicitly rejects reasoning / thinking compatibility, the gateway retries the same candidate with `xhigh/high -> medium -> low -> remove reasoning` before giving up or moving on.
+- Completed the current CodexManager repair pass: Claude Code reasoning propagation, dashboard billing aggregation, channel-distribution switching, token/cache trends, third-party pricing, model-router upstream availability hover, Aggregate API fast semantics, request-log Codex context, and non-GPT 400/500 failover have all been validated against the PRD.
+- Restored the Aggregate API `fast` switch in settings and unified it with platform-key fast semantics. Enabling either entry can activate fast request rewriting, and the gateway no longer ignores `candidate.fast`.
+- Added the default-model board in the model router with editable model groups and visible catalog, upstream directory, probe, and route coverage states.
+- Reinforced Claude / Anthropic vendor routing coverage and the explicit single-model disable regression path so future Claude models still match vendor rules while a single-model disable remains higher priority.
+- Fixed manual model additions being overwritten by later catalog-only refreshes in upstream probing. Successful/manual capabilities now stay sticky against weaker catalog-only refreshes, with a regression test covering the merge.
+- Fixed the upstream probe cache being write-only. Batch/non-forced probes now reuse unexpired successful or manual `model_probe_cache` entries, expired entries or updated API config are reprobed, failed entries respect the retry backoff window, and manual probes pass `force=true` to bypass the cache.
+- Fixed request-log Anthropic thinking and Codex session hover gaps. Request metadata now parses Anthropic `thinking`, usage now accepts `thinking_output_tokens` / `thinking_tokens` aliases, and the hover now includes parent thread, subagent, agent, session expected, request effective, and route source fields.
+- Fixed custom Codex App `model_catalog_json` catalogs from CodexManager potentially emptying the picker or dropping reasoning choices. Built-in slugs such as `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, and `gpt-5.2` now start from Codex built-in templates and keep reasoning, tool, and picker capabilities instead of being overwritten by upstream-cache `false` values.
+- Fixed Codex rejecting `model-catalog.codexmanager.json` when `auto_compact_token_limit` was serialized as a float. The field is now emitted as an integer, and local validation confirmed `codex debug models -c model_catalog_json=...` reads 912 models.
+- Fixed the missing safe recovery path for cases where CodexManager has exported its model catalog but Codex App picker still only shows `GPT-5.5`. Background model-cache sync still only writes cache/catalog files and does not silently rewrite user config.
+- Fixed misleading Codex App model-visibility diagnostics. Diagnostics now distinguish the stored raw catalog from the computed managed catalog and list `/v1/models` projections for every active platform key, avoiding false catalog-missing conclusions on fresh profiles or multi-key setups.
+- Fixed Aggregate API `provider_partition` / `protocol_profile` round-tripping. List RPC responses now return the stored DB values instead of re-deriving them from `pool`, so detected protocol profiles remain visible to UI/API consumers.
+- Fixed Aggregate API liveness and response probes being treated as the same signal. A successful `/models` catalog read now means the endpoint, auth, and catalog are alive; one model `/responses` failure no longer marks the key dead.
+- Fixed Azure OpenAI probes selecting arbitrary old preview models from the catalog and surfacing false 404 failures. Probes now prefer bound models and configured fallbacks before falling back to discovered catalog models.
+- Fixed compatibility for domestic OpenAI-compatible and chat-only relays. Catalog parsing now accepts common `data`, `models`, `items`, string-array, and `id/name/slug/model` shapes, and records Responses versus Chat Completions capabilities separately.
+- Fixed Claude / Anthropic-native relay probes sending OpenAI-only request bodies. Capability probes now use the Messages API, a cheap fallback model, and `message_stop` stream termination.
+- Fixed streaming probes timing out after valid output because the read window was too small. The cutoff is now 16 KiB and terminal detection accepts both `event:` and JSON `data.type` signals.
 - Fixed missing Spark dedicated quota display by continuing to parse official `additional_rate_limits[].rate_limit` buckets.
 - Adjusted the usage-details dialog so multiple additional quota windows can be shown in two columns with scrolling.
+- Fixed main-session model overrides that could be unlocked but not cleared. The model router now has a "restore built-in model" action and clears mirrored runtime-anchor state.
+- Fixed request logs mixing routed request model/reasoning with expected session model/reasoning. Logs now expose request effective values, session expected values, and the conversation binding anchor separately.
+- Fixed missing Web transport command mappings for setting and clearing subagent session models.
+- Fixed Codex App threads selecting a non-`gpt-5.5` model while gateway requests still used stale `session_model_memory` and fell back to `gpt-5.5`. The request hot path now reads the latest `state_5.sqlite` thread model and lets newer Codex state override stale `source=state` memory.
+- Fixed `reasoning_effort=none` being normalized away, which previously let requests continue using the platform key default reasoning effort.
+- Fixed model router and platform key dialogs not allowing explicit `reasoning_effort=none`, keeping "follow default" distinct from explicit `none`.
+- Fixed main-session "restore built-in model" potentially inheriting another recent custom model from the same workspace. Clear now uses only explicit workspace defaults, global defaults, or the built-in product default.
+- Fixed ordinary candidate fallback session-affinity stripping still recursively deleting nested `encrypted_content`, which could drop thinking context outside the Aggregate API retry path.
+- Fixed Aggregate API `/v1/responses` passthrough and stateless retry deleting nested `reasoning.encrypted_content`, which could make DeepSeek/Kimi/MiMo thinking models reject resumed turns and surface as 502.
+- Fixed Responses-to-Chat-Completions conversion so reasoning item `encrypted_content` is mapped back to assistant `reasoning_content`, and Chat Completions streaming now writes upstream `reasoning_content` back as a Responses reasoning output item.
+- Fixed the desktop startup snapshot command dropping lightweight options. The dashboard no longer stays on skeleton or zero data because a heavy statistics branch timed out.
+- Fixed Codex model-cache sync only writing `model_catalog_json` without correcting `[model_providers.cm].base_url`, which could leave Codex App calling the wrong port and showing or using the wrong model list.
+- Fixed ordinary Codex platform keys still using official account rotation after selecting probed Aggregate API models such as GLM, Kimi, MiMo, or Minimax. Non-built-in GPT models now automatically use model-router Aggregate API candidates.
+- Fixed model-catalog local reads still triggering remote discovery. Remote timeouts now fall back to the local cache, and common model details are seeded so the model list and add-model flow do not go empty.
+- Fixed remote model merge showing a red failure toast on remote 10060 timeouts even when the local model catalog was still usable. The UI now reloads the local catalog and keeps the list visible.
+- Fixed the real remote-merge path for account-pool and Aggregate API models: model catalog refresh now merges successful `upstream_model_capabilities` first and skips self-referential Aggregate APIs pointing at the local CodexManager service, avoiding `pool -> localhost:48760/v1/models` recursive probes and false refresh failures.
+- Fixed desktop model-catalog RPC calls still using the 10-second default read timeout; `apikey/modelCatalogList` and `apikey/models` now use a 90-second catalog-refresh timeout so Tauri does not cut off a valid service refresh as 10060.
+- Fixed the dashboard historical token/cost overview being degraded to recent request-log fallback data. Historical model distribution now uses full `request_token_stats` aggregation again.
+- Fixed a P0 desktop sync issue where CodexManager could automatically rewrite the user's `config.toml`. Model sync now writes only model cache/catalog files, no longer overwrites provider, `base_url`, or `model_catalog_json`, and seeds GPT fallback models so Codex App menus are not emptied by a blank catalog.
 
 ### Changed
+- The model-router App diagnostics tab now shows computed-versus-stored catalog counts and an active-key projection table so users can separate the inferred latest key from all possible key binding filters.
+- Model-router probe results now split `auth`, `catalog`, `response`, `/responses`, `/chat`, `Claude Messages`, and model source so users can distinguish a live key/catalog from a failed per-model response probe.
+- The dashboard now uses a lightweight startup snapshot by default, keeping accounts, today's usage, and recent request logs while deriving token/model charts from recent-log fallback data to avoid startup blocking on large log stores.
+- Session model state now distinguishes newer Codex state from stale local memory so App thread state is not misreported as a custom override.
 - Bumped the release version to `0.2.6` and synchronized workspace, frontend package, Tauri desktop metadata, and lockfiles.
+- Bumped the release version to `0.2.7` and synchronized workspace, frontend package, Tauri desktop metadata, and router-dev metadata so the new package does not overwrite the previous `0.2.6` installers.
 - Removed recent-commit blocks from README entry pages so they only keep stable feature and documentation entry points.
 - Restored the upstream total-timeout setting in the Settings gateway transport card. `CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS` can now be viewed and changed there; default `0` means no service-side total-duration cutoff.
 - Added a dedicated `/v1/images/` block to the Nginx example config for image uploads, large `b64_json` responses, and long-running image generation.
@@ -130,7 +183,7 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 - Fixed the issue where the key ID in the platform key list was truncated by default; now it will be directly displayed in full for easy verification and troubleshooting.
 
 ### Changed
-- README adds sponsorship support entrance and sponsorship area jump, making it easier to locate sponsorship instructions directly from the top of the document.
+- README removes sponsorship, payment, and contact entrances from the project front page, and now highlights fork updates, source attribution, and documentation navigation.
 - The release version is upgraded to `0.1.12`, and workspace, front-end package, Tauri desktop, version consistency verification script and README are updated simultaneously.
 
 ## [0.1.11] - 2026-03-20

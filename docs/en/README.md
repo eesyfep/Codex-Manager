@@ -23,7 +23,7 @@ CodexManager is a local desktop + service-process account pool manager and gatew
 - Aggregate API: create/edit/test third-party relay upstreams with supplier naming and priority ordering.
 - Plugin center: built-in, private, and custom source modes with task/log views and Rhai integration.
 - Local service + gateway: custom bind/listen settings, upstream proxy, total request timeout, stream idle timeout, SSE keepalive, and a unified compatible endpoint.
-- Image generation: automatically injects the official Codex `image_generation` tool for `/v1/responses` by default, forwards explicit tools unchanged, and exposes compatible `/v1/images/generations` and `/v1/images/edits` endpoints with `gpt-image-2` as the default image tool model.
+- Image generation: forwards the official Codex `image_generation` tool and exposes compatible `/v1/images/generations` and `/v1/images/edits` endpoints with `gpt-image-2` as the default image tool model.
 
 ## Quick Start
 
@@ -52,36 +52,16 @@ CodexManager is a local desktop + service-process account pool manager and gatew
 - For the latest release notes, see [CHANGELOG.md](CHANGELOG.md).
 - If you are not sure which document to open first, use the table below.
 
-## Sponsors
+## Source
 
-Thanks to the following sponsors for supporting CodexManager.
+This fork continues from the public project. The only retained source link is the GitHub repository: <https://github.com/qxcnm/Codex-Manager>.
 
-<table>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" width="88" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>Thanks to VisionCoder for supporting this project.</strong><br />
-      <a href="https://coder.visioncoder.cn">VisionCoder Developer Platform</a> is a reliable and efficient API relay provider that offers mainstream AI models such as Claude Code, Codex, and Gemini, helping developers and teams integrate AI more easily and improve productivity.<br />
-      <strong>Limited-time offer:</strong> VisionCoder is offering our users a <a href="https://coder.visioncoder.cn">Token Plan</a> promotion: buy 1 month and get 1 month free.
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://gzxsy.vip/register?aff=eapz">
-        <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="Xing Si Yan Gateway" width="120" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>Xing Si Yan Gateway</strong> provides stable relay and supporting services for Claude Code, Codex, and similar model-call scenarios. It is suitable for developers and teams that require highly available APIs, convenient onboarding, and continuous delivery support. Visit the <a href="https://gzxsy.vip/register?aff=eapz">official site</a> for the latest plans.
-    </td>
-  </tr>
-</table>
+## Fork Updates
 
-Other supporters: [Wonderdch](https://github.com/Wonderdch), [suxinwl](https://github.com/suxinwl), [Hermit](https://github.com/HermitChen), [Suifeng023](https://github.com/Suifeng023), [HK-hub](https://github.com/HK-hub)
+- Model routing, Aggregate API, Codex App model visibility, and Claude Code tool-chain compatibility have been repaired across multiple passes.
+- Request logs now include session context, ToolSearch degradation mode, and tool-schema validation summaries.
+- Dashboard charts, billing estimates, third-party model pricing, token/cache trends, and historical statistics have been tightened.
+- See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## Ecosystem Pairing
 
@@ -167,7 +147,3 @@ One-off reports: yyyyMMddHHmmssfff_topic.md
 - Keep architecture notes in `ARCHITECTURE.md`.
 - Keep collaboration rules in `CONTRIBUTING.md`.
 - Put unreleased change details in `CHANGELOG.md`; keep the README focused on navigation and summary.
-
-## Contact
-- WeChat: add `ProsperGao` to join the group, and please mention your purpose
-- Telegram group: [CodexManager TG group](https://t.me/+OdpFa9GvjxhjMDhl)

@@ -10,31 +10,19 @@
   <a href="docs/en/README.md">English</a>|
   <a href="docs/ru/README.md">Русский</a>|
   <a href="docs/ko/README.md">한국어</a>|
-  <a href="https://github.com/qxcnm/Codex-Manager">GitHub 主仓库</a>|
-  <a href="https://qxnm.top">官网</a>|
-  <a href="#赞助商">赞助商</a>
+  <a href="https://github.com/qxcnm/Codex-Manager">原仓库</a>
 </p>
 
 <p align="center"><strong>本地桌面端 + 服务进程的 Codex 账号池管理器</strong></p>
 <p align="center">统一管理账号、用量与平台 Key，并提供本地网关能力。</p>
 
-## 认可社区
-<p align="left">
-  <a href="https://linux.do/t/topic/1688401" title="LINUX DO">
-    <img
-      src="https://cdn3.linux.do/original/4X/d/1/4/d146c68151340881c884d95e0da4acdf369258c6.png"
-      alt="LINUX DO"
-      width="100"
-      hight="100"
-    />
-  </a>
-</p>
+## 当前 fork 定位
 
-## 源码说明：
-> 本产品完全由本人指挥+AI打造 Codex（98%） Gemini (2%) 如果在使用过程中产生问题请友好交流，因为开源只是觉得有人能用的上，基本功能也没什么问题，不喜勿喷。
-> 其次是本人没有足够的环境来验证每个包都有没有问题，本人也要上班(我只是个穷逼买不起mac之类的)，本人只保证win的桌面端的可用性，如果其他端有问题，请在充分测试后提交 Issues，有时间我自会处理
-> 最后感谢各位使用者反馈的各个平台问题和参与的部分测试。
+这是 `eesyfep/Codex-Manager` fork 的维护版本，项目首页只展示当前 fork 的功能增量、运行入口和更新记录。原作者赞助、收款码、社群推广和个人说明已从本 README 移除；上游来源仅保留为仓库链接，便于追溯代码来源。
 
+## 来源
+
+本 fork 基于公开项目继续维护。来源仅保留 GitHub 仓库链接：<https://github.com/qxcnm/Codex-Manager>。
 
 ## 免责声明
 
@@ -42,66 +30,29 @@
 
 - 使用者必须遵守相关平台的服务条款（例如 OpenAI、Anthropic）。
 
-- 作者不提供或分发任何账号、API Key 或代理服务，也不对本软件的具体使用方式负责。
+- 本 fork 不提供或分发任何账号、API Key 或代理服务，也不对本软件的具体使用方式负责。
 
 - 请勿使用本项目绕过速率限制或服务限制。
 
-## 赞助商
+## 本 fork 更新
 
-感谢以下朋友与伙伴对 CodexManager 的支持。
+| 方向 | 当前 fork 更新 | 相对上游原项目的区别 |
+| --- | --- | --- |
+| 模型路由 | 补齐默认模型板块、可搜索多选规则、厂商 / 模型族 / pattern 规则、上游目录与测响状态 | 从账号池管理扩展为可维护的模型路由控制层 |
+| 聚合 API | 支持页内绑定模型、测活 / 测响拆分、协议画像、provider partition、失败候选重试和 reasoning fallback | 更适合接入多个 OpenAI-compatible / Claude-compatible / 聚合中转上游 |
+| Codex App 兼容 | 新增模型目录诊断、显式启用模型目录、线程模型状态修复、第三方模型可见性修复 | 重点解决 Codex App 只显示内置模型、线程模型状态错配等问题 |
+| Claude Code 兼容 | 修复 GPT / Claude 路径的 tool schema、`H.command` 风险、thinking 历史回放和 reasoning 透传 | 面向 Claude Code / Anthropic 兼容链路补齐协议桥接与日志证据 |
+| 请求日志 | 补齐项目 / 会话上下文、request effective 与 session expected 分离、ToolSearch 降级模式、工具 schema 校验摘要 | 排障时能区分真实请求模型、会话期望模型、降级模式和上游错误 |
+| 仪表盘与计费 | 修复第三方模型价格、未知价格展示、token/cache 趋势、历史 token / cost 聚合和 dashboard 图表交互 | 更关注多供应商运营、计费估算和长期使用统计 |
 
-<table>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" width="88" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>感谢 VisionCoder 对本项目的支持。</strong><br />
-      <a href="https://coder.visioncoder.cn">VisionCoder 开发平台</a> 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。<br />
-      <strong>限时活动：</strong> VisionCoder 为我们的用户提供 <a href="https://coder.visioncoder.cn">Token Plan</a> 优惠，购买 1 个月，赠送 1 个月。
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://gzxsy.vip/register?aff=eapz">
-        <img src="assets/images/sponsors/xingsiyan.jpg" alt="星思研中转站" width="120" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>星思研中转站</strong> 为 Claude Code、Codex 等模型调用场景提供稳定中转与配套服务，适合需要高可用接口、便捷接入和持续交付支持的开发者与团队。可前往<a href="https://gzxsy.vip/register?aff=eapz">官网</a>了解最新方案。
-    </td>
-  </tr>
-</table>
+详细日志见 [CHANGELOG.md](CHANGELOG.md) 与 [中文更新日志](docs/zh-CN/CHANGELOG.md)。
 
+## 推荐阅读顺序
 
-其他支持者：呆头呆脑、 [Wonderdch](https://github.com/Wonderdch)、[suxinwl](https://github.com/suxinwl)、[Hermit](https://github.com/HermitChen)、[Suifeng023](https://github.com/Suifeng023)、[HK-hub](https://github.com/HK-hub)
-
-
-## ☕ 支持项目 (Support)
-
-如果您觉得本项目对您有所帮助，欢迎打赏作者！
-<table>
-  <tr>
-    <th>支付宝 (Alipay)</th>
-    <th>微信支付 (WeChat)</th>
-  </tr>
-  <tr>
-    <td align="center"><img src="assets/images/AliPay.jpg" alt="支付宝赞助码" width="220" /></td>
-    <td align="center"><img src="assets/images/wechatPay.jpg" alt="微信赞助码" width="220" /></td>
-  </tr>
-</table>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=qxcnm%2FCodex-Manager&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=qxcnm/Codex-Manager&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=qxcnm/Codex-Manager&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=qxcnm/Codex-Manager&type=date&legend=top-left" />
- </picture>
-</a>
+1. 先看本 README 的“本 fork 更新”和“功能概览”，确认当前维护版与上游原项目的区别。
+2. 再看 [CHANGELOG.md](CHANGELOG.md) 和 [docs/zh-CN/CHANGELOG.md](docs/zh-CN/CHANGELOG.md)，按日期追踪具体修复。
+3. 部署或接入时直接进入 [运行与部署指南](docs/zh-CN/report/运行与部署指南.md)。
+4. 遇到模型不可见、聚合 API 不通、请求日志异常时，优先看“首页导览”中的排障文档。
 
 ## 首页导览
 | 你要做什么 | 直接进入 |
@@ -121,7 +72,7 @@
 - 批量导入 / 导出：支持多文件导入、桌面端文件夹递归导入 JSON、按账号导出单文件
 - 用量展示：支持标准 5 小时 + 7 日窗口、仅 7 日单窗口账号，以及 Code Review / Spark 等官方附加额度窗口；刷新后会统一展示各额度的剩余百分比与重置时间
 - 授权登录：浏览器授权 + 手动回调解析
-- 平台 Key：随机生成或自定义固定 Key、禁用、删除、模型绑定、推理等级、服务等级（跟随请求 / Fast / Flex）
+- 平台 Key：生成、禁用、删除、模型绑定、推理等级、服务等级（跟随请求 / Fast / Flex）
 - 模型管理：维护结构化模型目录、远端并入、自定义模型、`visibility` / `supportedInApi` 管理，以及桌面端 Codex 缓存同步 / Web 端缓存导出
 - 聚合 API：管理第三方最小转发上游，支持创建、编辑、测试连通性、供应商名称、顺序优先级，以及按 Codex / Claude 分类展示
 - 插件中心：路由为 `/plugins/`，支持内置精选、企业私有、自定义源三种市场模式，并提供插件清单、任务、日志与 Rhai 对接接口
@@ -129,7 +80,7 @@
 - 系统内部接口总表：列出当前桌面端与服务端所有可对接命令、RPC 方法、以及插件内建函数
 - 本地服务：自动拉起、可自定义端口与监听地址
 - 本地网关：为 Codex CLI、Gemini CLI、Claude Code 和第三方工具提供统一 OpenAI 兼容入口；Gemini 请求可转发到 `/v1/responses`，并兼容 SSE、tools、MCP、skill、请求总超时与流式空闲超时等调用链路
-- 图片生成：默认按官方 Codex 行为为 `/v1/responses` 自动注入 `image_generation` tool，并支持显式 tool 透传、`/v1/images/generations` 与 `/v1/images/edits` 兼容入口，默认图片工具模型为 `gpt-image-2`
+- 图片生成：支持官方 Codex `image_generation` tool 透传、`/v1/images/generations` 与 `/v1/images/edits` 兼容入口，默认图片工具模型为 `gpt-image-2`
 
 ## 生态搭配
 
@@ -220,10 +171,3 @@
 
 - Codex（OpenAI）：本项目在请求链路、登录语义与上游兼容行为上参考了该项目的实现与源码结构 <https://github.com/openai/codex>
 - CLIProxyAPI（CPA）：本项目在请求链路（Responses 请求转换与工具调用约定）参考其实现与约定 <https://github.com/router-for-me/CLIProxyAPI>
-
-
-
-## 联系方式
-- 公众号：七线牛马
-- 微信：加微信群请加我微信 `ProsperGao`，并说明来意
-- Telegram 群聊：[CodexManager TG 群](https://t.me/+OdpFa9GvjxhjMDhl)

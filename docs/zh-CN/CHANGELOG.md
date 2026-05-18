@@ -6,15 +6,75 @@
 ## [Unreleased]
 
 ### Added
-- 新增 Codex 图片生成兼容链路：默认按官方 Codex 行为为 `/v1/responses` 自动注入 `image_generation` tool，支持显式 tool 透传，并提供 `/v1/images/generations` 与 `/v1/images/edits` 兼容入口，默认图片工具模型为 `gpt-image-2`。
+- 新增 Codex 图片生成兼容链路：支持官方 `image_generation` tool 透传，并提供 `/v1/images/generations` 与 `/v1/images/edits` 兼容入口，默认图片工具模型为 `gpt-image-2`。
 - Codex CLI 首次接入引导新增 `auth.json` 配置步骤，明确平台 Key、`auth.json` 与 `config.toml` 的关系。
+- 平台 Key 的“绑定模型”支持多选，并会为下游 `/v1/models` 按绑定模型暴露 OpenAI / Anthropic 兼容模型列表。
+- 请求日志新增 `tool_schema_events_json` 字段：Claude Code / Anthropic SSE / aggregate 输出桥会记录脱敏后的工具 schema 校验摘要，包括工具名归一、schema 来源、校验状态、必填字段、归一化字段和阻断原因，便于排查 GPT 路径 `H.command` 类崩溃风险。
+- 请求日志新增 `tool_search_mode` 字段：当 ToolSearch / `dynamic_tools` 因当前代理链不支持 `tool_reference` 而降级为 upfront tools 时，日志会记录并展示 `degraded_to_upfront_tools`。
+- 模型路由 App 诊断页新增“启用模型目录”显式修复入口：会校验本机 `model-catalog.codexmanager.json`、备份 `config.toml`，并写入唯一的顶层 `model_catalog_json`，用于恢复 Codex App picker 的第三方模型列表。
 
 ### Fixed
+- 修复模型路由 fallback 兜底：会话用过的 aggregate API 被关闭（`status=disabled`）后，再次请求时如果该 API 是该 model 唯一 `success` capability 来源，原路由会返回空候选导致 `failed_no_candidate` 直接报错。现新增 `fallback_candidates` 兜底层，回退到同 partition 内所有 active aggregate API，并写 `event=model_router_fallback_to_active_pool reason=bound_apis_disabled` 日志。
+- 修复前后端价格归一化口径分歧：OpenRouter snapshot 中 `~xxx-latest` 别名条目不再先入价格 index（避免抢占 `claude-sonnet-4.6` 等具体版本）；`mimo-v2.5-pro` 不再被前端 normalize 误覆写成 `mimo-v2.5`；`qwen-plus-*` 不再被后端 normalize 误归并到 `qwen-max`，新增 `qwen-plus` 价格条目，与前端口径对齐。
+- 修复 aggregate fast 最后一个语义误导：当平台密钥 fast / 聚合 API fast 有意图，但当前 aggregate upstream profile/path 不支持 `service_tier=priority` 注入时，请求日志现在会明确显示"不支持当前协议/路径"，不再误导成 fast 已生效。
+- 修复 ToolSearch 降级静默不可见的问题：`dynamic_tools` / `dynamicTools` 会展开到 `tools`，并将降级模式贯通到 SQLite、RPC summary 和请求日志“类型 / 方法 / 路径”悬浮详情，避免 Claude Code/GPT 工具链排错时看不到兼容模式。
+- 修复第三方模型计价静默为 0 的问题：DeepSeek、Kimi、Qwen、Claude 等模型的后端估算与前端价格表对齐；GLM、MiMo 和未知模型返回未知价格状态，不再把缺失价格表误显示成 0 元。
+- 修复模型路由默认模型测响不是有效动作的问题：默认模型可用性板块现在提供单模型“测响”和“批量测响”按钮，触发真实 `modelRouter/probe/quickCall` RPC，并在结果中展示尝试上游、supplier、profile、URL 摘要和失败 profile。
+- 修复 Claude Code 通过 GPT / Codex 模型返回命令工具调用时，Anthropic SSE 桥接输出空 `tool_use.input` 导致客户端出现 `undefined is not an object (evaluating 'H.command')` 的崩溃风险；命令类工具现在会保留参数并补齐 `command` 字段。
+- 修复 Claude / MiMo / DeepSeek thinking 模式历史回放缺失：Anthropic `thinking` / `redacted_thinking` 历史会转换为 Responses reasoning item，Responses 转 Chat Completions 时会把 reasoning signature 回填为 assistant `reasoning_content`，thinking 模式下的 assistant tool-call 历史缺失时会补空字符串占位。
+- 新增聚合 API reasoning 400 同候选降级重试：上游返回明确 reasoning / thinking 不兼容时，当前候选会按 `xhigh/high -> medium -> low -> 移除 reasoning` 继续重试，避免 MiMo 设置 high 后直接失败。
+- 完成本轮 CodexManager 修复收尾：Claude Code 推理透传、仪表盘计费合并、渠道分布切换、token/cache 趋势、第三方模型计价、模型路由上游可用性 hover、聚合 API fast 语义恢复、请求日志 Codex 项目-会话上下文，以及非 GPT 模型 400/500 failover 都已按 PRD 回归验证。
+- 恢复聚合 API settings 内的 `fast` 开关，并统一平台密钥 fast 与聚合 API fast 的生效语义：任一入口开启时都能启用 fast 请求改写，请求路径不再忽略 `candidate.fast`。
+- 补齐模型路由默认模型板块：现在可编辑默认模型组，并同时显示 catalog、上游目录、测响和路由覆盖状态。
+- 补齐 Anthropic / Claude 厂商级路由覆盖和显式单模型禁用回归测试，确保未来新增 Claude 模型仍能命中厂商规则，而单模型禁用始终优先。
+- 修复上游探测“手动添加后被自动 catalog 刷新覆盖”的问题：`success/manual` 能力不会被 `catalog_only` 降级，并增加了对应回归测试。
+- 修复上游探测缓存只写不读的问题：批量/非强制探测会复用未过期成功或手动缓存，过期缓存或 API 配置更新会重新探测，失败缓存遵守退避窗口；手动测响会带 `force=true` 绕过缓存。
+- 修复请求日志 Anthropic thinking 和 Codex 会话 hover 缺口：请求侧识别 Anthropic `thinking`，usage 兼容 `thinking_output_tokens` / `thinking_tokens`，hover 里新增 parent thread、subagent、agent、session expected、request effective 和 route source。
+- 修复 Codex App 自定义 `model_catalog_json` 指向 CodexManager catalog 后模型目录可能变空或缺少推理档位的问题：内置 `gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex` / `gpt-5.2` 现在以 Codex 内置模型模板补全 reasoning、tool 和 picker 能力字段，并阻止上游缓存里的 `false` 覆盖这些能力。
+- 修复 `model-catalog.codexmanager.json` 中 `auto_compact_token_limit` 被写成浮点数时 Codex 直接拒绝读取的问题；该字段现在按整数输出，本机已验证 `codex debug models -c model_catalog_json=...` 可读取 912 个模型。
+- 修复已导出 CodexManager 模型目录但 Codex App picker 仍只显示 `GPT-5.5` 时缺少安全恢复入口的问题；后台模型缓存同步仍只导出缓存文件，不会静默改写用户配置。
+- 修复 Codex App 模型可见性诊断仍可能误导的问题：诊断现在区分 stored raw catalog 与 computed managed catalog，并列出所有 active platform key 的 `/v1/models` 投影，避免 fresh catalog 或多 key 场景下把第三方模型缺失误判为 catalog 不存在。
+- 修复聚合 API `provider_partition` / `protocol_profile` round-trip 问题：列表 RPC 现在返回 DB 中保存的分区和协议画像，不再按 `pool` 二次推导，避免 UI/API 消费方看不到已探测或手动更新后的协议画像。
+- 修复聚合 API“测活”和“测响”语义混用的问题：`/models` 目录读取成功会被视为 endpoint / auth / catalog 活着，单个模型 `/responses` 探针失败不再直接把 Key 判死。
+- 修复 Azure OpenAI 探针可能从目录里选到旧 preview 模型并返回 404 的误判；探针现在优先使用绑定模型和配置 fallback，再退回目录模型。
+- 修复国产 OpenAI-compatible / chat-only 中转站测响兼容性问题，目录解析支持 `data`、`models`、`items`、字符串数组与 `id/name/slug/model` 字段，并按 Responses 或 Chat Completions 能力分别记录。
+- 修复 Claude / Anthropic-native 中转站测响发送 OpenAI-only 请求体的问题，能力探针改用 Messages API、便宜 fallback 模型和 `message_stop` 流式终止判断。
+- 修复流式测响读取窗口过短导致已经返回内容却仍显示超时的问题，探针读取上限从 4096 bytes 提升到 16384 bytes，并识别 `event:` 与 `data.type` 两类终止信号。
+- 修复桌面端同步 Codex 模型目录会自动激活 model_catalog_json 的问题；同步流程现在只导出 models_cache.json 和 model-catalog.codexmanager.json，不再改写用户 config.toml，避免 Codex App Desktop picker 被 custom catalog 拖成空列表。
 - 修复官方返回的 Spark 专属额度未展示的问题，附加额度会按 `additional_rate_limits[].rate_limit` 继续解析并显示。
 - 调整额度详情弹窗布局，附加额度较多时可按两列展示并滚动查看。
+- 修复 Claude / Anthropic 兼容客户端选择 `anthropic-<模型名>` 映射名后，上游请求体仍保留映射名前缀的问题。
+- 修复 OpenAI 兼容客户端使用未绑定模型的平台 Key 获取 `/v1/models` 时仍收到 Codex 私有 `models` 结构的问题，CC Desktop Switch 等客户端现在可解析标准 `data` 模型列表。
+- 修复主会话模型 override 只能解锁但不能恢复内置模型的问题，模型路由页现在提供“恢复内置模型”，并同步清理派生 runtime anchor 的镜像状态。
+- 修复请求日志把请求路由模型 / reasoning 与会话期望模型 / reasoning 混在一起展示的问题，日志页现在分别显示 request effective 与 session expected，并暴露 conversation binding anchor。
+- 修复 Codex App 运行期刷新 `/v1/models` 后模型能力字段丢失的问题，带 `client_version` 的 Codex 模型目录请求现在继续返回完整 `models` 结构与 reasoning 元数据，避免模型菜单退化为缺少推理档位的 OpenAI `data` 列表。
+- 修复 Web transport 下子 Agent 会话模型设置 / 清除缺少 RPC 映射的问题。
+- 修复 Codex App 线程选择其它模型后，网关请求仍只读取旧 `session_model_memory` 并回落到 `gpt-5.5` 的问题；请求热路径现在会读取 `state_5.sqlite` 最新线程模型，并让较新的 Codex state 覆盖陈旧 `source=state` 记忆。
+- 修复 `reasoning_effort=none` 被规范化丢弃，导致最终请求继续使用平台 Key 默认 reasoning 的问题。
+- 修复模型路由页与平台 Key 弹窗无法显式选择 `reasoning_effort=none` 的问题，区分“跟随默认”和“显式 none”。
+- 修复主会话“恢复内置模型”可能继承同 workspace 其它会话最近自定义模型的问题，clear 路径现在只使用显式 workspace 默认、全局默认或产品内置默认。
+- 修复普通候选 fallback strip session affinity 时仍递归删除 nested `encrypted_content` 的问题，避免非 aggregate retry 路径丢失 thinking context。
+- 修复聚合 API `/v1/responses` 透传与 stateless retry 会删除嵌套 `reasoning.encrypted_content` 的问题，避免 DeepSeek/Kimi/MiMo thinking 模型在续接轮次因缺少 reasoning context 返回 400 并被包装成 502。
+- 修复 Responses 转 Chat Completions 时未把 reasoning item 的 `encrypted_content` 映射回 assistant `reasoning_content` 的问题，并在 Chat Completions 流式桥接中把上游 `reasoning_content` 回写为 Responses reasoning output item。
+- 修复桌面端首页启动快照丢弃轻量参数的问题，首页不再因重统计分支超时而一直显示骨架屏或零数据。
+- 修复同步 Codex 模型目录时只写 `model_catalog_json`、不校正 `[model_providers.cm].base_url` 的问题，避免 Codex App 继续请求错误端口后只能看到或调用错误模型。
+- 修复普通 Codex 平台 Key 选择 GLM/Kimi/MiMo/Minimax 等已探测成功的聚合模型后仍走官方账号轮转的问题；非内置 GPT 模型现在会自动使用模型路由的聚合 API 候选。
+- 修复模型目录读取会在本地刷新时仍触发远端发现的问题；远端超时会回退本地缓存，并内置常用模型目录明细，避免模型列表变空或无法新增模型。
+- 修复模型管理“远端并入”在远端 10060 超时时仍弹红色失败的问题，现在会自动回读本地模型目录并保留可见列表。
+- 修复“远端并入”未稳定并入号池/聚合 API 模型的真实链路问题：模型目录刷新会先合并已成功探测的 `upstream_model_capabilities`，并跳过指向 CodexManager 本机服务的自引用聚合 API，避免 `号池 -> localhost:48760/v1/models` 递归探测拖慢或误报失败。
+- 修复桌面端模型目录 RPC 仍使用 10 秒默认读超时的问题；`apikey/modelCatalogList` 与 `apikey/models` 现在使用 90 秒模型目录刷新超时，避免服务端真实刷新完成前被 Tauri 客户端截断为 10060。
+- 修复仪表盘历史 Token/费用总览被轻量快照降级到最近请求日志的问题，历史分布恢复使用 `request_token_stats` 全量聚合。
+- 修复桌面端同步 Codex 模型目录时会自动改写用户 `config.toml` 的 P0 问题；同步流程现在只写模型缓存和 catalog 文件，不再覆盖 provider、`base_url` 或 `model_catalog_json`，并内置 GPT 系列保底模型避免 Codex App 模型菜单被空目录拖空。
 
 ### Changed
+- 2026-05-18：重新执行 v3 定向回归与 Windows installer 打包。已通过 `cargo fmt --check`、`pnpm --dir apps run build:desktop`、`pnpm --dir apps exec node --test tests/pricing-display.test.mjs`、aggregate failover / failover policy 定向 Rust 测试，以及 dashboard / logs / aggregate-api 的 Playwright smoke；`cargo tauri build` 已刷新 `CodexManager_0.2.7_x64-setup.exe` 与 `CodexManager_0.2.7_x64_en-US.msi`。
+- 2026-05-15：模型路由 App 诊断页新增 computed/stored catalog 对照与 active key projection 表，明确“推断 key”和真实多 key 过滤面的区别。
+- 2026-05-15：模型路由测响结果拆分显示 `auth`、`catalog`、`response`、`/responses`、`/chat`、`Claude Messages` 与模型来源，便于区分“Key / 目录可用”和“某个模型真实响应失败”。
+- 2026-05-13：首页默认使用轻量启动快照，保留账号、今日用量和最近请求日志，Token/模型趋势由最近日志回退生成，降低大日志库下的启动阻塞风险。
+- 2026-05-13：模型路由页新增“App 诊断”入口，同时展示 raw catalog、App-visible projection、当前 platform key `/v1/models` 投影、绑定模型和目标模型命中状态，用于定位 Codex App 只显示单模型的实际过滤层。
+- 2026-05-13：会话模型状态增加“状态库较新”标识，避免 Codex App 当前线程状态被本地自动记忆误判为自定义覆盖。
 - 发布版本提升到 `0.2.6`，同步更新 workspace、前端包、Tauri 桌面端与锁文件。
+- 发布版本提升到 `0.2.7`，同步更新 workspace、前端包、Tauri 桌面端与 router-dev 元数据，避免新打包覆盖旧 `0.2.6` 安装包。
 - README 不再展示最近提交块，首页只保留稳定的功能与文档入口。
 - 设置页恢复“上游总超时”入口，`CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS` 可通过网关传输设置直接查看和修改，默认 `0` 表示不按总时长截断。
 - Nginx 示例配置新增 `/v1/images/` 专用代理块，覆盖图片上传、大体积 `b64_json` 响应与长耗时图片生成场景。
@@ -130,7 +190,7 @@
 - 修复平台密钥列表中密钥 ID 默认被截断的问题；现在会直接完整显示，便于核对与排查。
 
 ### Changed
-- README 新增赞助支持入口与赞助区跳转，方便从文档顶部直接定位到赞助说明。
+- README 移除赞助、收款和联系方式主入口，改为突出当前 fork 更新、来源链接和文档导航。
 - 发布版本提升到 `0.1.12`，同步更新 workspace、前端包、Tauri 桌面端、版本一致性校验脚本与 README 最新版本说明。
 
 ## [0.1.11] - 2026-03-20

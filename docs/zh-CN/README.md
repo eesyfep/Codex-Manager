@@ -12,36 +12,17 @@
 - `release/*`：构建、发版、产物和发布流程说明。
 - `docs/plan/*` / `docs/decision/*`：长期治理、实施计划与决策记录。
 
-## 赞助商
+## 来源
 
-感谢以下赞助商对 CodexManager 的支持。
+本 fork 基于公开项目继续维护。来源仅保留 GitHub 仓库链接：<https://github.com/qxcnm/Codex-Manager>。
 
-<table>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://coder.visioncoder.cn">
-        <img src="https://coder.visioncoder.cn/logo.png" alt="VisionCoder" width="88" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>感谢 VisionCoder 对本项目的支持。</strong><br />
-      <a href="https://coder.visioncoder.cn">VisionCoder 开发平台</a> 是一个可靠高效的 API 中继服务提供商，提供 Claude Code、Codex、Gemini 等主流 AI 模型，帮助开发者和团队更轻松地集成 AI 功能，提升工作效率。<br />
-      <strong>限时活动：</strong> VisionCoder 为我们的用户提供 <a href="https://coder.visioncoder.cn">Token Plan</a> 优惠，购买 1 个月，赠送 1 个月。
-    </td>
-  </tr>
-  <tr>
-    <td align="center" valign="middle" width="180">
-      <a href="https://gzxsy.vip/register?aff=eapz">
-        <img src="../../assets/images/sponsors/xingsiyan.jpg" alt="星思研中转站" width="120" />
-      </a>
-    </td>
-    <td valign="top">
-      <strong>星思研中转站</strong> 为 Claude Code、Codex、Gemini 等模型调用场景提供稳定中转与配套服务，适合需要高可用接口、便捷接入和持续交付支持的开发者与团队。可前往<a href="https://gzxsy.vip/register?aff=eapz">官网</a>了解最新方案。
-    </td>
-  </tr>
-</table>
+## 本 fork 更新
 
-其他支持者：[Wonderdch](https://github.com/Wonderdch)、[suxinwl](https://github.com/suxinwl)、[Hermit](https://github.com/HermitChen)、[Suifeng023](https://github.com/Suifeng023)、[HK-hub](https://github.com/HK-hub)
+- 本 fork 文档首页只保留当前维护版本的功能增量、运行入口和更新记录；原作者赞助、收款码、社群推广和个人说明不再作为主文档内容展示。
+- 模型路由、聚合 API、Codex App 模型可见性与 Claude Code 工具链兼容已完成多轮修复。
+- 请求日志新增会话上下文、ToolSearch 降级模式和工具 schema 校验摘要。
+- 仪表盘、计费估算、第三方模型价格、token/cache 趋势和历史统计已补齐回归。
+- 详细记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 文档首页
 | 如果你现在要做什么 | 建议先看 |
@@ -96,7 +77,6 @@
 ### 治理与决策
 | 文档 | 作用 |
 | --- | --- |
-| [账号模式与额度分发锁定策略.md](report/账号模式与额度分发锁定策略.md) | 说明账号系统、额度分发、平台 Key 归属和成员钱包扣费的锁定规则 |
 
 ## 提交规则
 
@@ -132,6 +112,3 @@
 - 架构总览继续维护在 `ARCHITECTURE.md`。
 - 协作规范继续维护在 `CONTRIBUTING.md`。
 - 不要把未发版更新同时写进多个长文档；需要对外说明时，优先补 `CHANGELOG.md`，README 只保留摘要和入口。
-
-## 联系方式
-- Telegram 群聊：[CodexManager TG 群](https://t.me/+OdpFa9GvjxhjMDhl)
